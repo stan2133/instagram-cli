@@ -256,9 +256,10 @@ async function searchUsers(query) {
     console.error('❌ 搜索出错:', error.message);
     throw error;
   } finally {
-    // 不关闭浏览器，保持连接
+    // 断开浏览器连接
     if (browser) {
-      console.log('✅ 搜索完成，浏览器保持打开状态\n');
+      await browser.disconnect();
+      console.log('✅ 搜索完成，已断开浏览器连接\n');
     }
   }
 }
