@@ -2,220 +2,263 @@
 
 /**
  * Instagram User Search Script
- * 使用 Puppeteer 搜索 Instagram 用户并返回前10条结果
+ * 使用已登录的浏览器实例搜索用户
  */
 
-const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 
 // Session 存储路径
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
-const COOKIE_FILE = path.join(SESSION_DIR, 'cookies.json');
+const BROWSER_INFO_FILE = path.join(SESSION_DIR, 'browser-info.json');
 
 /**
- * 加载已保存的 cookies
+ * 连接到已运行的浏览器实例
  */
-function loadCookies() {
-  if (fs.existsSync(COOKIE_FILE)) {
-    const cookiesData = fs.readFileSync(COOKIE_FILE, 'utf8');
-    return JSON.parse(cookiesData);
+async function connectToExistingBrowser() {
+  // 读取浏览器信息
+  if (fs.existsSync(BROWSER_INFO_FILE)) {
+    const browserInfo = JSON.parse(fs.readFileSync(BROWSER_INFO_FILE, 'utf8'));
+    console.log('✓ 找到已运行的浏览器实例');
+    console.log(`  WebSocket URL: ${browserInfo.webSocketDebuggerUrl}`);
+    return browserInfo;
   }
-  return [];
+  return null;
 }
 
 /**
  * 使用 Puppeteer 搜索 Instagram 用户
  */
 async function searchUsers(query) {
+  const puppeteer = require('puppeteer');
+
+  console.log(`🔍 正在搜索用户: ${query}\n`);
+
+  // 检查是否有已运行的浏览器
+  const browserInfo = await connectToExistingBrowser();
+
   let browser;
-  try {
-    console.log(`🔍 正在搜索用户: ${query}`);
+  let page;
 
-    // 启动浏览器
-    browser = await puppeteer.launch({
-      headless: false, // 显示浏览器窗口
-      defaultViewport: null,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-web-security',
-      ]
-    });
+  if (browserInfo) {
+    // 连接到现有浏览器
+    try {
+      browser = await puppeteer.connect({
+        browserWSEndpoint: browserInfo.webSocketDebuggerUrl,
+        defaultViewport: null,
+      });
+      console.log('✅ 已连接到现有浏览器实例\n');
 
-    const page = await browser.newPage();
+      // 获取所有页面
+      const pages = await browser.pages();
+      page = pages[0]; // 使用第一个页面
 
-    // 设置 user agent
-    await page.setUserAgent(
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
+      // 诊断：打印当前页面 URL
+      const currentUrl = page.url();
+      console.log(`📄 当前页面: ${currentUrl}\n`);
 
-    // 加载已保存的 cookies
-    const cookies = loadCookies();
-    if (cookies.length > 0) {
-      console.log('🍪 加载已保存的登录状态...');
-      await page.setCookie(...cookies);
-    }
-
-    // 访问 Instagram 搜索页面
-    const searchUrl = `https://www.instagram.com/results/web_search/?search_query=${encodeURIComponent(query)}`;
-    console.log(`🌐 访问搜索页面...`);
-
-    await page.goto(searchUrl, {
-      waitUntil: 'networkidle2',
-      timeout: 60000
-    });
-
-    // 等待页面加载
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    // 尝试查找搜索结果
-    const results = await page.evaluate(() => {
-      const users = [];
-
-      // Instagram 的搜索结果通常在以下结构中
-      // 尝试多种选择器
-      const selectors = [
-        'div[role="dialog"] a',
-        'div[role="listitem"] a',
-        'a[href*="/"]',
-      ];
-
-      for (const selector of selectors) {
-        const elements = document.querySelectorAll(selector);
-        if (elements.length > 0) {
-          elements.forEach((el, index) => {
-            if (index >= 10) return; // 只取前10条
-
-            const href = el.getAttribute('href');
-
-            // 获取头像图片
-            let avatarUrl = '';
-            const img = el.querySelector('img');
-            if (img) {
-              avatarUrl = img.src || img.getAttribute('data-src') || '';
-            }
-
-            const username = el.querySelector('span')?.textContent?.trim() ||
-                           el.textContent?.trim() ||
-                           '';
-
-            // 过滤出用户链接（格式：/username/）
-            if (href && href.match(/^\/[^\/]+\/$/) && username) {
-              // 避免重复
-              if (!users.find(u => u.username === username.replace('@', ''))) {
-                users.push({
-                  username: username.replace('@', ''),
-                  profileUrl: `https://www.instagram.com${href}`,
-                  fullName: el.getAttribute('title') || '',
-                  avatarUrl: avatarUrl || ''
-                });
-              }
-            }
-          });
-
-          if (users.length > 0) break;
-        }
+      // 如果页面是空白，导航到 Instagram
+      if (currentUrl === 'about:blank' || !currentUrl.includes('instagram.com')) {
+        console.log('🔄 页面为空，导航到 Instagram 主页...\n');
+        await page.goto('https://www.instagram.com/', {
+          waitUntil: 'networkidle2',
+          timeout: 60000
+        });
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
-      return users;
-    });
+    } catch (error) {
+      console.log('⚠️  连接失败，请确保 login.js 正在运行');
+      console.log(`   错误: ${error.message}\n`);
+      process.exit(1);
+    }
+  } else {
+    console.log('❌ 未找到已运行的浏览器');
+    console.log('请先运行: node login.js');
+    console.log('并在浏览器中完成登录\n');
+    process.exit(1);
+  }
 
-    // 如果上述方法没有找到结果，尝试另一种方法
-    if (results.length === 0) {
-      console.log('⚠️  使用替代方法搜索...');
+  try {
+    // 先点击搜索图标，触发搜索框出现
+    console.log('🔍 尝试点击搜索图标...\n');
 
-      // 访问主页并使用搜索框
-      await page.goto('https://www.instagram.com/', {
-        waitUntil: 'networkidle2',
-        timeout: 60000
-      });
+    const searchIconSelectors = [
+      'svg[aria-label="Search"]',
+      'svg[aria-label="搜索"]',
+      'button[aria-label="Search"]',
+      'button[aria-label="搜索"]',
+    ];
 
-      await new Promise(resolve => setTimeout(resolve, 2000));
+    let iconClicked = false;
+    for (const selector of searchIconSelectors) {
+      try {
+        const icon = await page.$(selector);
+        if (icon) {
+          console.log(`✓ 找到搜索图标: ${selector}\n`);
+          await icon.click();
+          console.log('✓ 已点击搜索图标\n');
+          iconClicked = true;
+          await new Promise(resolve => setTimeout(resolve, 2000)); // 等待搜索框出现
+          break;
+        }
+      } catch (e) {
+        console.log(`✗ 选择器 ${selector} 未找到`);
+        continue;
+      }
+    }
 
-      // 点击搜索框
-      const searchBoxSelectors = [
-        'input[placeholder*="Search"]',
-        'input[placeholder*="搜索"]',
-        'input[type="text"]',
+    if (!iconClicked) {
+      console.log('⚠️  未找到搜索图标，可能搜索框已经显示\n');
+    }
+
+    // 在查找搜索框
+    console.log('🔍 查找搜索框...\n');
+
+    const searchSelectors = [
+      'input[aria-label="Search"]',
+      'input[aria-label="搜索"]',
+      'input[aria-label*="Search"]',
+      'input[aria-label*="搜索"]',
+    ];
+
+    let searchBox = null;
+    let foundSelector = '';
+
+    for (const selector of searchSelectors) {
+      try {
+        await page.waitForSelector(selector, { timeout: 3000 });
+        searchBox = await page.$(selector);
+        if (searchBox) {
+          foundSelector = selector;
+          console.log(`✓ 找到搜索框: ${selector}\n`);
+          break;
+        }
+      } catch (e) {
+        console.log(`✗ 选择器 ${selector} 未找到`);
+        continue;
+      }
+    }
+
+    if (searchBox) {
+      console.log('✓ 输入搜索内容...\n');
+      await searchBox.click();
+      await new Promise(resolve => setTimeout(resolve, 500));
+      await searchBox.click({ clickCount: 3 }); // 三击全选
+      await page.keyboard.press('Backspace'); // 清空
+      await page.type(foundSelector, query, { delay: 100 }); // 使用找到的选择器输入
+
+      console.log(`✅ 已输入: "${query}"`);
+
+      // 点击搜索图标或按钮触发搜索
+      console.log('🔍 点击搜索图标触发搜索...\n');
+
+      const searchTriggerSelectors = [
+        'svg[aria-label="Search"]',
+        'svg[aria-label="搜索"]',
+        'button[aria-label="Search"]',
+        'button[aria-label="搜索"]',
       ];
 
-      for (const selector of searchBoxSelectors) {
+      let searchTriggered = false;
+      for (const triggerSelector of searchTriggerSelectors) {
         try {
-          await page.waitForSelector(selector, { timeout: 5000 });
-          await page.click(selector);
-          await page.type(selector, query, { delay: 100 });
-          await new Promise(resolve => setTimeout(resolve, 3000));
-
-          // 获取搜索结果
-          const searchResults = await page.evaluate(() => {
-            const users = [];
-            const links = document.querySelectorAll('a[href*="/"]');
-
-            links.forEach((link) => {
-              if (users.length >= 10) return;
-
-              const href = link.getAttribute('href');
-              if (href && href.match(/^\/[^\/]+\/$/)) {
-                const username = href.replace(/\//g, '');
-
-                // 获取头像图片
-                let avatarUrl = '';
-                const img = link.querySelector('img');
-                if (img) {
-                  avatarUrl = img.src || img.getAttribute('data-src') || '';
-                }
-
-                if (!users.find(u => u.username === username)) {
-                  users.push({
-                    username,
-                    profileUrl: `https://www.instagram.com${href}`,
-                    fullName: '',
-                    avatarUrl: avatarUrl || ''
-                  });
-                }
-              }
-            });
-
-            return users;
-          });
-
-          if (searchResults.length > 0) {
-            results.push(...searchResults);
+          const trigger = await page.$(triggerSelector);
+          if (trigger) {
+            await trigger.click();
+            console.log(`✓ 已点击搜索按钮: ${triggerSelector}\n`);
+            searchTriggered = true;
             break;
           }
         } catch (e) {
-          console.log(`尝试选择器 ${selector} 失败`);
           continue;
         }
       }
+
+      if (!searchTriggered) {
+        console.log('⚠️  未找到搜索按钮，直接使用已输入的搜索内容\n');
+      }
+
+      console.log('⏳ 等待 4 秒让搜索结果加载...\n');
+      await new Promise(resolve => setTimeout(resolve, 4000));
+
+      // 从页面中提取搜索结果
+      const results = await page.evaluate(() => {
+        const users = [];
+
+        // 查找搜索结果对话框
+        const searchDialog = document.querySelector('[role="dialog"]');
+        const searchContainer = searchDialog || document.body;
+
+        // 查找所有 role="link" 的元素
+        const userLinks = searchContainer.querySelectorAll('[role="link"]');
+
+        userLinks.forEach((link) => {
+          if (users.length >= 10) return;
+
+          const href = link.getAttribute('href');
+
+          // 只匹配用户主页链接 (格式: /username/)
+          if (href && href.match(/^\/[^\/]+\/$/) && !href.includes('/')) {
+            const username = href.replace(/\//g, '');
+
+            // 获取头像图片
+            let avatarUrl = '';
+            const img = link.querySelector('img');
+            if (img) {
+              avatarUrl = img.src || img.getAttribute('data-src') || img.getAttribute('srcset') || '';
+            }
+
+            // 获取用户名显示文本
+            const usernameEl = link.querySelector('span');
+            const displayUsername = usernameEl ? usernameEl.textContent.trim() : username;
+
+            // 检查是否已验证
+            const verifiedBadge = link.querySelector('svg[aria-label="Verified"]');
+            const isVerified = !!verifiedBadge;
+
+            if (!users.find(u => u.username === username)) {
+              users.push({
+                username,
+                displayName: displayUsername,
+                profileUrl: `https://www.instagram.com${href}`,
+                fullName: '',
+                avatarUrl: avatarUrl || '',
+                isVerified: isVerified
+              });
+            }
+          }
+        });
+
+        return users;
+      });
+
+      console.log(`✅ 找到 ${results.length} 个用户:\n`);
+
+      // 显示结果
+      results.forEach((user, index) => {
+        console.log(`${index + 1}. @${user.username}${user.isVerified ? ' ✓' : ''}`);
+        if (user.fullName && user.fullName !== user.username) {
+          console.log(`   全名: ${user.fullName}`);
+        }
+        console.log(`   头像: ${user.avatarUrl || '未获取到'}`);
+        console.log(`   链接: ${user.profileUrl}`);
+        console.log('');
+      });
+
+      return results;
+    } else {
+      console.log('❌ 未找到搜索框');
+      return [];
     }
-
-    // 限制返回前10条结果
-    const topResults = results.slice(0, 10);
-
-    console.log(`\n✅ 找到 ${topResults.length} 个用户:\n`);
-
-    // 显示结果
-    topResults.forEach((user, index) => {
-      console.log(`${index + 1}. @${user.username}`);
-      console.log(`   全名: ${user.fullName || '未提供'}`);
-      console.log(`   头像: ${user.avatarUrl || '未获取到'}`);
-      console.log(`   链接: ${user.profileUrl}`);
-      console.log('');
-    });
-
-    return topResults;
 
   } catch (error) {
     console.error('❌ 搜索出错:', error.message);
     throw error;
   } finally {
+    // 不关闭浏览器，保持连接
     if (browser) {
-      console.log('\n按 Ctrl+C 关闭浏览器...');
-      // 不自动关闭浏览器，让用户可以查看
-      // await browser.close();
+      console.log('✅ 搜索完成，浏览器保持打开状态\n');
     }
   }
 }
@@ -227,6 +270,7 @@ async function main() {
   if (!query) {
     console.log('使用方法: node search-user.js <搜索关键词>');
     console.log('示例: node search-user.js "coco"');
+    console.log('\n注意: 请先运行 node login.js 登录并保持浏览器打开\n');
     process.exit(1);
   }
 
@@ -236,7 +280,7 @@ async function main() {
     // 保存结果到文件
     const outputFile = path.join(__dirname, `search-results-${Date.now()}.json`);
     fs.writeFileSync(outputFile, JSON.stringify(results, null, 2));
-    console.log(`\n📁 结果已保存到: ${outputFile}`);
+    console.log(`\n📁 结果已保存到: ${outputFile}\n`);
 
   } catch (error) {
     console.error('搜索失败:', error);
