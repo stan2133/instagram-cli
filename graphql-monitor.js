@@ -83,8 +83,8 @@ async function startMonitor() {
       httpOnly: c.httpOnly || false,
       sameSite: c.sameSite || false,
       expirationDate: c.expirationDate,
-    size: c.session ? c.size : undefined,
-    }));
+      size: c.session ? c.size : undefined
+    })));
   } else {
     console.log('❌ 未找到 cookies 文件');
     console.log('请先运行: node login.js\n');
@@ -101,7 +101,7 @@ async function startMonitor() {
   console.log('═══════════════════════════════════════════');
   console.log('  监听中，会记录所有 GraphQL 请求到文件:');
   console.log(`   📁 请求日志: ${OUTPUT_DIR}/graphql-*.json`);
-  console.log('   📄 当前日志: ${OUTPUT_DIR}/graphql-current.json`);
+  console.log(`   📄 当前日志: ${OUTPUT_DIR}/graphql-current.json`);
   console.log('═════════════════════════════════════════\n');
   console.log('  💡 提示：按 Ctrl+C 停止监听');
   console.log('═══════════════════════════════════════\n');
