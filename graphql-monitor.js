@@ -72,32 +72,39 @@ async function startMonitor() {
     process.exit(1);
   }
 
-  // 设置请求拦截
-  page.on('request', async (request) => {
-    const url = request.url();
+  // 设置响应拦截
+  page.on('response', async (response) => {
+    const url = response.url();
 
-    // 只记录 GraphQL 请求
+    // 只记录 GraphQL 响应
     if (url.includes('/graphql/query')) {
-      const requestData = {
-        method: request.method(),
-        url: url,
-        headers: request.headers(),
-        postData: request.postData(),
-      };
+      try {
+        const responseData = {
+          method: response.request().method(),
+          url: url,
+          status: response.status(),
+          headers: response.headers(),
+          requestData: response.request().postData(),
+          responseData: await response.json(),
+        };
 
-      // 保存到文件
-      const timestamp = new Date().toISOString();
-      const logFile = path.join(OUTPUT_DIR, `graphql-${timestamp}.json`);
+        // 保存到文件
+        const timestamp = new Date().toISOString();
+        const logFile = path.join(OUTPUT_DIR, `graphql-${timestamp}.json`);
 
-      // 同时保存到当前日志文件（追加模式）
-      const currentLogFile = path.join(OUTPUT_DIR, 'graphql-current.json');
+        // 同时保存到当前日志文件（追加模式）
+        const currentLogFile = path.join(OUTPUT_DIR, 'graphql-current.json');
 
-      fs.writeFileSync(logFile, JSON.stringify(requestData, null, 2));
-      fs.appendFileSync(currentLogFile, JSON.stringify(requestData, null, 2) + '\n');
+        fs.writeFileSync(logFile, JSON.stringify(responseData, null, 2));
+        fs.appendFileSync(currentLogFile, JSON.stringify(responseData, null, 2) + '\n');
 
-      console.log(`📋 GraphQL 请求已记录`);
-      console.log(`   URL: ${url}`);
-      console.log(`   文件: ${path.basename(logFile)}`);
+        console.log(`📋 GraphQL 响应已记录`);
+        console.log(`   URL: ${url}`);
+        console.log(`   状态: ${response.status()}`);
+        console.log(`   文件: ${path.basename(logFile)}`);
+      } catch (error) {
+        console.log(`❌ 解析 GraphQL 响应失败: ${error.message}`);
+      }
     }
   });
 
