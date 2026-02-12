@@ -275,12 +275,7 @@ async function main() {
   }
 
   try {
-    const results = await searchUsers(query);
-
-    // 保存结果到文件
-    const outputFile = path.join(__dirname, `search-results-${Date.now()}.json`);
-    fs.writeFileSync(outputFile, JSON.stringify(results, null, 2));
-    console.log(`\n📁 结果已保存到: ${outputFile}\n`);
+    await searchUsers(query);
 
   } catch (error) {
     console.error('搜索失败:', error);
