@@ -43,6 +43,7 @@ async function login() {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
+        '--remote-debugging-port=9222', // 启用远程调试端口
       ]
     });
 
@@ -100,6 +101,24 @@ async function login() {
 
     // 保存 cookies
     saveCookies(cookies);
+
+    // 保存浏览器连接信息
+    const browserInfo = {
+      webSocketDebuggerUrl: `ws://127.0.0.1:${browser.wsEndpoint()?.split(':').pop()}`,
+    pid: browser.process()?.pid
+    };
+
+    // 确保 session 目录存在
+    if (!fs.existsSync(SESSION_DIR)) {
+      fs.mkdirSync(SESSION_DIR, { recursive: true });
+    }
+
+    // 保存浏览器信息供其他脚本使用
+    const browserInfoFile = path.join(SESSION_DIR, 'browser-info.json');
+    fs.writeFileSync(browserInfoFile, JSON.stringify(browserInfo, null, 2));
+
+    console.log(`\n📋 浏览器连接信息已保存`);
+    console.log(`  文件: ${browserInfoFile}\n`);
 
     // 显示登录信息
     console.log('\n✅ 登录成功!\n');
