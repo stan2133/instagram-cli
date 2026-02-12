@@ -9,10 +9,28 @@ const fs = require('fs');
 const path = require('path');
 const puppeteer = require('puppeteer');
 
+// Session 存储路径
+const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
+const BROWSER_INFO_FILE = path.join(SESSION_DIR, 'browser-info.json');
+
 // 输出目录
 const OUTPUT_DIR = path.join(__dirname, 'graphql-logs');
 if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+}
+
+/**
+ * 连接到已运行的浏览器实例
+ */
+async function connectToExistingBrowser() {
+  // 读取浏览器信息
+  if (fs.existsSync(BROWSER_INFO_FILE)) {
+    const browserInfo = JSON.parse(fs.readFileSync(BROWSER_INFO_FILE, 'utf8'));
+    console.log('✓ 找到已运行的浏览器实例');
+    console.log(`  WebSocket URL: ${browserInfo.webSocketDebuggerUrl}`);
+    return browserInfo;
+  }
+  return null;
 }
 
 /**
@@ -21,17 +39,38 @@ if (!fs.existsSync(OUTPUT_DIR)) {
 async function startMonitor() {
   console.log('🚀 启动 GraphQL 监听器...\n');
 
-  const browser = await puppeteer.launch({
-    headless: false,
-    defaultViewport: null,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    ]
-  });
+  // 检查是否有已运行的浏览器
+  const browserInfo = await connectToExistingBrowser();
 
-  const page = await browser.newPage();
+  let browser;
+  let page;
+
+  if (browserInfo) {
+    // 连接到现有浏览器
+    try {
+      browser = await puppeteer.connect({
+        browserWSEndpoint: browserInfo.webSocketDebuggerUrl,
+        defaultViewport: null,
+      });
+      console.log('✅ 已连接到现有浏览器实例\n');
+
+      // 获取所有页面
+      const pages = await browser.pages();
+      page = pages[0]; // 使用第一个页面
+
+      console.log(`📄 监听页面: ${page.url()}\n`);
+
+    } catch (error) {
+      console.log('⚠️  连接失败，请确保 login.js 正在运行');
+      console.log(`   错误: ${error.message}\n`);
+      process.exit(1);
+    }
+  } else {
+    console.log('❌ 未找到已运行的浏览器');
+    console.log('请先运行: node login.js');
+    console.log('并在浏览器中完成登录\n');
+    process.exit(1);
+  }
 
   // 设置请求拦截
   page.on('request', async (request) => {
@@ -60,41 +99,6 @@ async function startMonitor() {
       console.log(`   URL: ${url}`);
       console.log(`   文件: ${path.basename(logFile)}`);
     }
-  });
-
-  // 访问 Instagram（使用 login.js 保存的 cookies）
-  console.log('🌐 访问 Instagram...\n');
-
-  // 加载 cookies
-  const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
-  const COOKIE_FILE = path.join(SESSION_DIR, 'cookies.json');
-
-  if (fs.existsSync(COOKIE_FILE)) {
-    const cookies = JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf8'));
-    console.log(`🍪 加载 ${cookies.length} 个 cookies`);
-
-    // 分配 cookies 给页面
-    await page.setCookie(...cookies.map(c => ({
-      name: c.name,
-      value: c.value,
-      domain: c.domain || '.instagram.com',
-      path: c.path || '/',
-      secure: c.secure || true,
-      httpOnly: c.httpOnly || false,
-      sameSite: c.sameSite || false,
-      expirationDate: c.expirationDate,
-      size: c.session ? c.size : undefined
-    })));
-  } else {
-    console.log('❌ 未找到 cookies 文件');
-    console.log('请先运行: node login.js\n');
-    process.exit(1);
-  }
-
-  console.log('✅ Cookies 已加载，导航到 Instagram\n');
-  await page.goto('https://www.instagram.com/', {
-    waitUntil: 'networkidle2',
-    timeout: 60000
   });
 
   console.log('\n✅ GraphQL 监听器已启动！');
