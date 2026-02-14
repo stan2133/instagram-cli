@@ -220,7 +220,8 @@ async function login(targetUrl) {
       ]
     });
 
-    const page = await browser.newPage();
+    const pages = await browser.pages();
+    const page = pages[0];
 
     // 设置 user agent
     await page.setUserAgent(
