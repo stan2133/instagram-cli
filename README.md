@@ -12,6 +12,7 @@ Instagram CLI 是一个功能完整的命令行工具，允许你通过终端管
 - ✅ **Spec-Driven Development** - 完整的测试覆盖 (59/59 测试通过)
 - 💻 **TypeScript 实现** - 类型安全，易于维护
 - 🎨 **美观的 CLI 界面** - 彩色输出，交互式提示
+- 🤖 **MCP 集成** - 支持 Cursor 和其他 MCP 工具直接操作浏览器
 
 ## 📋 阶段一：登录功能 (Phase 1 - COMPLETED)
 
@@ -410,3 +411,66 @@ MIT License - 仅供学习研究使用
 ---
 
 **Made with ❤️ using Spec-Driven Development**
+
+## 🤖 MCP 集成 (Beta)
+
+本项目支持 **Model Context Protocol (MCP)**，允许你在 Cursor 等 AI 工具中直接操作已登录的 Instagram 浏览器。
+
+### 快速开始
+
+1. **安装 Puppeteer MCP Server**:
+   ```bash
+   npm install -g puppeteer-mcp-server
+   ```
+
+2. **启动登录会话**:
+   ```bash
+   node login_web.js https://www.instagram.com
+   ```
+   
+   - 浏览器自动打开
+   - 手动完成登录
+   - 登录成功后按 Enter
+   - **保持浏览器运行**
+
+3. **在 Cursor 中使用**:
+   
+   项目已配置 `mcp_config.json`，Cursor 会自动识别。
+   
+   ```
+   你: 使用 puppeteer 连接到浏览器
+   
+   AI: ✅ 已连接到浏览器
+   
+   你: 截图保存为 homepage
+   
+   AI: ✅ 截图已保存
+   
+   你: 点击搜索图标
+   
+   AI: ✅ 已点击搜索图标
+   
+   你: 在搜索框输入 "travel"
+   
+   AI: ✅ 已输入 "travel"
+   
+   你: 截图
+   
+   AI: ✅ 截图已保存
+   ```
+
+### 可用工具
+
+- `puppeteer_connect_active_tab` - 连接到浏览器
+- `puppeteer_navigate` - 导航到新页面  
+- `puppeteer_screenshot` - 截图
+- `puppeteer_click` - 点击元素
+- `puppeteer_fill` - 填写表单
+- `puppeteer_evaluate` - 执行 JavaScript
+- `puppeteer_hover` - 悬停
+- `puppeteer_select` - 选择下拉菜单
+
+### 详细文档
+
+查看 [MCP_SETUP.md](./MCP_SETUP.md) 获取完整配置和使用指南。
+
