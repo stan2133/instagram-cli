@@ -1,184 +1,118 @@
-# 🚀 Instagram CLI - Phase 1 快速测试指南
+# Puppeteer MCP 快速开始指南
 
-## ✅ 阶段一完成状态
+## 5 分钟上手
 
-基于 **xiaohongshu-mcp** 架构的 Instagram 登录管理系统已全部实现！
+### 前置要求
 
-### 已实现功能
+- Node.js 已安装
+- Claude Desktop 或 Cursor IDE
 
-- ✅ **CookieManager** - Cookie 持久化存储
-- ✅ **LoginAction** - Instagram 登录领域逻辑
-- ✅ **InstagramService** - 业务逻辑层
-- ✅ **HTTP API** - REST 接口（3个端点）
-- ✅ **MCP Server** - Model Context Protocol 支持
-- ✅ **API Server** - Express 服务器
-- ✅ 完整文档 - USAGE_GUIDE.md (700+ 行)
+### 第一步：安装依赖
+
+```bash
+npm install
+
+# 安装 puppeteer-mcp-server (MCP 工具)
+npm install -g puppeteer-mcp-server
+```
+
+### 第二步：登录网站
+
+```bash
+# 以 Instagram 为例
+node login_web.js https://www.instagram.com
+```
+
+**操作**:
+1. 浏览器自动打开
+2. 手动输入用户名和密码登录
+3. 看到主页后回到终端按 **Enter**
+4. 看到 MCP 配置信息
+
+### 第三步：配置 MCP
+
+**复制登录成功后显示的配置**:
+
+```json
+{
+  "mcpServers": {
+    "puppeteer": {
+      "command": "npx",
+      "args": ["-y", "puppeteer-mcp-server"],
+      "env": {
+        "DEBUG_PORT": "9222"
+      }
+    }
+  }
+}
+```
+
+**Claude Desktop 用户**:
+1. 打开 `~/Library/Application Support/Claude/claude_desktop_config.json`
+2. 粘贴上述配置
+3. 保存文件
+4. 重启 Claude Desktop
+
+**Cursor 用户**:
+1. 打开 `~/.cursorrules`
+2. 粘贴上述配置
+3. 保存文件
+4. 重启 Cursor
+
+### 第四步：在 Claude/Cursor 中使用
+
+现在你可以直接在对话中使用 MCP 工具！
+
+**示例对话**:
+
+```
+👤 用户: 使用 puppeteer 连接到浏览器
+
+🤖 Claude: ✅ 已连接到浏览器
+   当前 URL: https://www.instagram.com/
+   
+👤 用户: 截图保存为 homepage
+
+🤖 Claude: ✅ 截图已保存
+
+👤 用户: 点击搜索图标
+
+🤖 Claude: ✅ 已点击搜索图标
+
+👤 用户: 在搜索框输入 "travel"
+
+🤖 Claude: ✅ 已输入文本
+
+👤 用户: 截图保存为 search-results
+
+🤖 Claude: ✅ 截图已保存
+```
+
+## 可用工具
+
+- `puppeteer_connect_active_tab` - 连接到浏览器
+- `puppeteer_navigate` - 导航到新页面
+- `puppeteer_screenshot` - 截图
+- `puppeteer_click` - 点击元素
+- `puppeteer_fill` - 填写表单
+- `puppeteer_evaluate` - 执行 JavaScript
+- `puppeteer_hover` - 悬停
+- `puppeteer_select` - 选择下拉菜单
+
+## 故障排查
+
+### MCP 工具不显示
+
+1. 确认安装: `npm list -g | grep puppeteer-mcp-server`
+2. 检查配置 JSON 格式
+3. 重启应用
+
+### 连接失败
+
+1. 确认 `login_web.js` 正在运行
+2. 检查端口: `lsof -i :9222`
+3. 确认浏览器窗口未关闭
 
 ---
 
-## 🧪 快速测试
-
-### 方式 1: 测试 HTTP API
-
-#### 1. 启动服务器
-
-```bash
-npm run server
-```
-
-**预期输出**：
-```
-═══════════════════════════════════════════════════════
-  Instagram API Server Started
-═══════════════════════════════════════════════════════
-  HTTP API:  http://localhost:3000
-  MCP:        http://localhost:3000/mcp
-  Health:     http://localhost:3000/health
-═══════════════════════════════════════════════════════
-```
-
-#### 2. 健康检查
-
-```bash
-curl http://localhost:3000/health
-```
-
-#### 3. 检查登录状态
-
-```bash
-curl http://localhost:3000/api/v1/login/status
-```
-
-#### 4. 启动登录流程（新终端）
-
-```bash
-curl -X POST http://localhost:3000/api/v1/login/qrcode
-```
-
-**操作流程**：
-1. Chrome 浏览器会自动打开
-2. 在浏览器中完成 Instagram 登录
-3. 等待自动检测（最多 2 分钟）
-4. Cookies 自动保存到 `.instagram-cli/cookies.json`
-
-#### 5. 使用测试脚本
-
-```bash
-node test-api.js
-```
-
----
-
-### 方式 2: 使用现有 CLI 命令
-
-#### 1. 登录
-
-```bash
-node bin/insta.js login
-```
-
-#### 2. 查看登录状态
-
-```bash
-node bin/insta.js session:check
-```
-
-#### 3. 查看浏览器状态
-
-```bash
-node bin/insta.js browser:status
-```
-
-#### 4. 关闭浏览器
-
-```bash
-node bin/insta.js browser:close
-```
-
----
-
-## 📁 文件结构
-
-```
-src/
-├── api/
-│   ├── routes.js              ✅ HTTP API 路由
-│   └── mcp-server.js          ✅ MCP 协议服务器
-├── services/
-│   ├── browser-manager.ts     (已有)
-│   ├── cookie-manager.js      ✅ 新增
-│   └── instagram-service.js   ✅ 新增
-├── instagram/
-│   └── login.js               ✅ 新增
-└── server.js                  ✅ 新增
-
-根目录：
-├── test-api.js                ✅ 新增
-├── USAGE_GUIDE.md             ✅ 新增 (700+ 行)
-├── PHASE1_XIAOHONGSHU_MCP_COMPLETE.md  ✅ 新增
-└── QUICKSTART.md              ✅ 本文件
-```
-
----
-
-## 🔌 API 端点
-
-### POST /api/v1/login/qrcode
-启动浏览器并等待用户手动登录 Instagram
-
-### GET /api/v1/login/status
-检查登录状态（验证 Cookies）
-
-### DELETE /api/v1/login/cookies
-删除 Cookies（登出）
-
----
-
-## 📚 完整文档
-
-查看 **USAGE_GUIDE.md** 获取：
-- 详细使用说明
-- 故障排除指南
-- 高级技巧
-- 最佳实践
-- 多语言示例（JavaScript、Python）
-
----
-
-## 🎯 下一步建议
-
-1. **立即测试**：
-   ```bash
-   npm run server
-   # 然后另一个终端
-   node test-api.js
-   ```
-
-2. **阅读文档**：
-   ```bash
-   cat USAGE_GUIDE.md
-   ```
-
-3. **开始使用**：
-   - 使用 CLI 命令进行日常操作
-   - 使用 HTTP API 集成到自动化流程
-   - 参考架构设计进行扩展
-
----
-
-## ✨ 与 xiaohongshu-mcp 的对比
-
-| 特性 | xiaohongshu-mcp (Go) | Instagram CLI (JS) | 状态 |
-|------|---------------------|-------------------|------|
-| Cookie 管理 | ✓ JSON 文件 | ✓ JSON 文件 | ✅ 完成 |
-| HTTP API | ✓ Gin | ✓ Express | ✅ 完成 |
-| MCP 协议 | ✓ 官方 SDK | ✓ 官方 SDK（可选） | ✅ 完成 |
-| 登录方式 | 二维码扫码 | 手动登录 | ✅ 适配 |
-| 浏览器自动化 | Rod | Puppeteer | ✅ 完成 |
-| 错误处理 | ✓ Panic 恢复 | ✓ Try-catch | ✅ 完成 |
-
----
-
-**🎉 恭喜！阶段一完成！**
-
-现在可以开始使用 Instagram CLI 的登录管理系统了。
+**提示**: 保持 `login_web.js` 运行，这样 MCP 工具才能连接到浏览器！
