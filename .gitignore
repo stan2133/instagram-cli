@@ -15,11 +15,18 @@ build/
 # Session files (security)
 sessions/
 *.session
+# Allow specific JSON files
 *.json
 !package.json
 !package-lock.json
 !tsconfig.json
 !jest.config.js
+!mcp_config.json
+!/.mcp.json
+
+# MCP generated session data (security)
+.instagram-cli/sessions/*.json
+!.instagram-cli/sessions/mcp-config.json
 
 # Logs
 logs/
