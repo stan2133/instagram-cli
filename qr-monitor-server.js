@@ -1,35 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * QR Monitor Server
- * 实时监听抖音登录弹窗中的二维码并通过 HTTP/SSE 输出
+ * QR Monitor HTTP Server
+ * 兼容现有 HTTP + SSE 接口，内部复用 QRMonitorCore
  */
 
 const express = require('express');
 const cors = require('cors');
-const puppeteer = require('puppeteer');
-const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
-const os = require('os');
-
-function toFileSafeToken(value) {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/^www\./, '')
-    .replace(/[^a-z0-9.-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '') || 'site';
-}
-
-function parsePort(value, fallback) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
-    return fallback;
-  }
-  return parsed;
-}
+const { QRMonitorManager, parsePort, localIps } = require('./src/qr/monitor-core');
 
 function printUsage() {
   console.log('使用方法: node qr-monitor-server.js [options]');
@@ -114,130 +93,12 @@ function parseCliOptions(argv) {
       options.qrFile = arg.slice('--qr-file='.length);
       continue;
     }
+
     options.error = `未知参数: ${arg}`;
     return options;
   }
+
   return options;
-}
-
-const cliOptions = parseCliOptions(process.argv.slice(2));
-if (cliOptions.help) {
-  printUsage();
-  process.exit(0);
-}
-if (cliOptions.error) {
-  console.error(`❌ ${cliOptions.error}\n`);
-  printUsage();
-  process.exit(1);
-}
-
-const PORT = parsePort(cliOptions.monitorPort || process.env.QR_MONITOR_PORT, 3999);
-const DEBUG_PORT = parsePort(cliOptions.debugPort || process.env.DEBUG_PORT, 9222);
-const TARGET_DOMAIN = (cliOptions.targetDomain || process.env.TARGET_DOMAIN || 'douyin.com').toLowerCase();
-const POLL_INTERVAL_MS = Number(process.env.QR_POLL_MS || 1000);
-const QR_MAX_AGE_MS = Number(process.env.QR_MAX_AGE_MS || 45000);
-const QR_REFRESH_COOLDOWN_MS = Number(process.env.QR_REFRESH_COOLDOWN_MS || 3500);
-
-const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
-const LOG_DIR = path.join(__dirname, 'logs');
-const DEFAULT_QR_FILE = PORT === 3999
-  ? 'qr-current.png'
-  : `qr-current-${toFileSafeToken(TARGET_DOMAIN)}-${PORT}.png`;
-const CURRENT_QR_FILE = path.join(LOG_DIR, cliOptions.qrFile || process.env.QR_CURRENT_FILENAME || DEFAULT_QR_FILE);
-
-const LOGIN_BUTTON_KEYWORDS = ['登录', '登錄', '登入', 'login', 'log in', 'sign in'];
-const QR_TAB_KEYWORDS = ['扫码登录', '二维码登录', 'qr login', 'scan login'];
-const QR_EXPIRED_KEYWORDS = ['二维码已失效', '已过期', 'expired', '失效'];
-const QR_REFRESH_KEYWORDS = ['刷新', '点击刷新', '重新获取', '重试', 'refresh'];
-const QR_HINT_KEYWORDS = ['扫码', '二维码', 'qr', 'qrcode', 'scan'];
-const MIN_QR_SCORE = Number(process.env.QR_MIN_SCORE || 6);
-
-const SITE_KEYWORD_OVERRIDES = {
-  'jianying.com': {
-    loginButtonKeywords: ['登录', '注册', '开启', '立即开启', '开启创作', '开始创作', '马上体验'],
-    qrTabKeywords: ['扫码登录', '二维码登录', '扫码', '二维码', '抖音扫码登录'],
-    qrHintKeywords: ['扫码', '二维码', 'qr', 'qrcode', 'scan'],
-  },
-};
-
-const clients = new Set();
-
-let browser = null;
-let monitorBusy = false;
-const siteKeywords = getSiteKeywords(TARGET_DOMAIN);
-
-const state = {
-  status: 'starting',
-  message: 'Monitor starting...',
-  connected: false,
-  pageUrl: '',
-  targetDomain: TARGET_DOMAIN,
-  lastError: '',
-  lastUpdateAt: new Date().toISOString(),
-  qrAvailable: false,
-  qrHash: '',
-  qrDataUrl: '',
-  qrFile: '',
-  qrCapturedAt: 0,
-  qrAgeMs: 0,
-  lastRefreshAttemptAt: 0,
-  refreshCount: 0,
-};
-
-function ensureDirs() {
-  if (!fs.existsSync(SESSION_DIR)) {
-    fs.mkdirSync(SESSION_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(LOG_DIR)) {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-  }
-}
-
-function mergeKeywords(primary, fallback) {
-  const merged = [...(primary || []), ...(fallback || [])];
-  return Array.from(new Set(merged.filter(Boolean)));
-}
-
-function getSiteKeywords(domain) {
-  const clean = (domain || '').replace(/^www\./, '').toLowerCase();
-  for (const [key, config] of Object.entries(SITE_KEYWORD_OVERRIDES)) {
-    if (clean.includes(key) || key.includes(clean)) {
-      return {
-        loginButtonKeywords: mergeKeywords(config.loginButtonKeywords, LOGIN_BUTTON_KEYWORDS),
-        qrTabKeywords: mergeKeywords(config.qrTabKeywords, QR_TAB_KEYWORDS),
-        qrHintKeywords: mergeKeywords(config.qrHintKeywords, QR_HINT_KEYWORDS),
-      };
-    }
-  }
-  return {
-    loginButtonKeywords: LOGIN_BUTTON_KEYWORDS,
-    qrTabKeywords: QR_TAB_KEYWORDS,
-    qrHintKeywords: QR_HINT_KEYWORDS,
-  };
-}
-
-function getPublicState() {
-  const qrAgeMs = state.qrCapturedAt ? Math.max(0, Date.now() - state.qrCapturedAt) : 0;
-  return {
-    status: state.status,
-    message: state.message,
-    connected: state.connected,
-    monitorPort: PORT,
-    debugPort: DEBUG_PORT,
-    pageUrl: state.pageUrl,
-    targetDomain: state.targetDomain,
-    qrAvailable: state.qrAvailable,
-    qrFile: state.qrFile,
-    qrAgeMs,
-    qrAgeSec: Math.floor(qrAgeMs / 1000),
-    refreshCount: state.refreshCount,
-    lastError: state.lastError,
-    lastUpdateAt: state.lastUpdateAt,
-  };
-}
-
-function updateState(patch) {
-  Object.assign(state, patch, { lastUpdateAt: new Date().toISOString() });
 }
 
 function sendSseEvent(res, event, payload) {
@@ -245,573 +106,66 @@ function sendSseEvent(res, event, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function broadcast(event, payload) {
-  for (const res of clients) {
-    sendSseEvent(res, event, payload);
+async function main() {
+  const cliOptions = parseCliOptions(process.argv.slice(2));
+  if (cliOptions.help) {
+    printUsage();
+    process.exit(0);
   }
-}
-
-function broadcastStatus() {
-  broadcast('status', getPublicState());
-}
-
-function toTimestampFilename() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `qr-${toFileSafeToken(TARGET_DOMAIN)}-${PORT}-${yyyy}${mm}${dd}-${hh}${mi}${ss}.png`;
-}
-
-function localIps() {
-  const nets = os.networkInterfaces();
-  const ips = [];
-  for (const key of Object.keys(nets)) {
-    for (const addr of nets[key] || []) {
-      if (addr.family === 'IPv4' && !addr.internal) {
-        ips.push(addr.address);
-      }
-    }
-  }
-  return ips;
-}
-
-async function connectBrowser() {
-  if (browser && browser.connected) {
-    return browser;
+  if (cliOptions.error) {
+    console.error(`❌ ${cliOptions.error}\n`);
+    printUsage();
+    process.exit(1);
   }
 
-  try {
-    browser = await puppeteer.connect({
-      browserURL: `http://127.0.0.1:${DEBUG_PORT}`,
-      defaultViewport: null,
-    });
-    browser.on('disconnected', () => {
-      browser = null;
-      updateState({
-        connected: false,
-        status: 'waiting_browser',
-        message: `Browser disconnected, waiting on port ${DEBUG_PORT}`,
-      });
-      broadcastStatus();
-    });
-    updateState({
-      connected: true,
-      status: 'connected',
-      message: `Connected to browser on port ${DEBUG_PORT}`,
-      lastError: '',
-    });
-    broadcastStatus();
-  } catch (error) {
-    updateState({
-      connected: false,
-      status: 'waiting_browser',
-      message: `Waiting for browser debug port ${DEBUG_PORT}...`,
-      lastError: String(error.message || error),
-    });
-    broadcastStatus();
-  }
+  const monitorPort = parsePort(cliOptions.monitorPort || process.env.QR_MONITOR_PORT, 3999);
+  const debugPort = parsePort(cliOptions.debugPort || process.env.DEBUG_PORT, 9222);
+  const targetDomain = (cliOptions.targetDomain || process.env.TARGET_DOMAIN || 'douyin.com').toLowerCase();
 
-  return browser;
-}
-
-async function getTargetPage() {
-  if (!browser || !browser.connected) {
-    return null;
-  }
-
-  const pages = await browser.pages();
-  if (!pages.length) {
-    return null;
-  }
-
-  const preferred = pages.find((p) => p.url().toLowerCase().includes(TARGET_DOMAIN));
-  if (preferred) {
-    return preferred;
-  }
-
-  const nonBlank = pages.find((p) => !p.url().startsWith('about:blank'));
-  return nonBlank || pages[0];
-}
-
-async function hasLoginModal(page) {
-  const modal = await page.$('.douyin_login_new_class');
-  if (modal) {
-    await modal.dispose();
-    return true;
-  }
-  return false;
-}
-
-async function hasLoginButton(page, keywords = LOGIN_BUTTON_KEYWORDS) {
-  return page.evaluate((inputKeywords) => {
-    const needles = inputKeywords.map((k) => k.toLowerCase());
-    const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const isVisible = (el) => {
-      const style = window.getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      return (
-        style.display !== 'none' &&
-        style.visibility !== 'hidden' &&
-        rect.width > 28 &&
-        rect.height > 16 &&
-        rect.bottom > 0 &&
-        rect.right > 0 &&
-        rect.top < window.innerHeight &&
-        rect.left < window.innerWidth
-      );
-    };
-
-    const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
-    for (const node of nodes) {
-      const text = normalize(node.innerText || node.textContent);
-      if (!text || text.length > 32) {
-        continue;
-      }
-      if (!needles.some((n) => text.includes(n))) {
-        continue;
-      }
-      const target = node.closest('button, a, [role="button"]') || node;
-      if (target instanceof HTMLElement && isVisible(target)) {
-        return true;
-      }
-    }
-    return false;
-  }, keywords);
-}
-
-async function clickByKeywords(page, keywords) {
-  return page.evaluate((inputKeywords) => {
-    const needles = inputKeywords.map((k) => k.toLowerCase());
-    const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const isVisible = (el) => {
-      const style = window.getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      return (
-        style.display !== 'none' &&
-        style.visibility !== 'hidden' &&
-        rect.width > 28 &&
-        rect.height > 16 &&
-        rect.bottom > 0 &&
-        rect.right > 0 &&
-        rect.top < window.innerHeight &&
-        rect.left < window.innerWidth
-      );
-    };
-
-    const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
-    for (const node of nodes) {
-      const text = normalize(node.innerText || node.textContent);
-      if (!text || text.length > 60) {
-        continue;
-      }
-      if (!needles.some((n) => text.includes(n))) {
-        continue;
-      }
-
-      const target = node.closest('button, a, [role="button"]') || node;
-      if (!(target instanceof HTMLElement) || !isVisible(target)) {
-        continue;
-      }
-
-      target.click();
-      return {
-        clicked: true,
-        text: text.slice(0, 80),
-        tag: target.tagName.toLowerCase(),
-      };
-    }
-
-    return { clicked: false };
-  }, keywords);
-}
-
-async function ensureLoginModalOpen(page) {
-  if (await hasLoginModal(page)) {
-    return true;
-  }
-
-  const clickRes = await clickByKeywords(page, siteKeywords.loginButtonKeywords);
-  if (clickRes.clicked) {
-    updateState({
-      status: 'waiting_login_modal',
-      message: `Clicked login button <${clickRes.tag}> ${clickRes.text}`,
-    });
-    broadcastStatus();
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    return hasLoginModal(page);
-  }
-
-  return false;
-}
-
-async function ensureQrTab(page) {
-  const switched = await clickByKeywords(page, siteKeywords.qrTabKeywords);
-  if (switched.clicked) {
-    updateState({
-      status: 'waiting_qr',
-      message: `Switched to QR tab: ${switched.text}`,
-    });
-    broadcastStatus();
-    await new Promise((resolve) => setTimeout(resolve, 800));
-  }
-}
-
-async function hasExpiredQrText(page) {
-  return page.evaluate((expiredKeywords) => {
-    const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const bodyText = normalize(document.body?.innerText || '');
-    return expiredKeywords.some((word) => bodyText.includes(word.toLowerCase()));
-  }, QR_EXPIRED_KEYWORDS);
-}
-
-function canAttemptRefresh() {
-  const now = Date.now();
-  if (now - state.lastRefreshAttemptAt < QR_REFRESH_COOLDOWN_MS) {
-    return false;
-  }
-  state.lastRefreshAttemptAt = now;
-  return true;
-}
-
-async function tryClickQrRefreshControl(page, force = false) {
-  return page.evaluate((expiredKeywords, refreshKeywords, forceRefresh) => {
-    const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const hasAny = (text, words) => words.some((w) => text.includes(w.toLowerCase()));
-    const isVisible = (el) => {
-      const style = window.getComputedStyle(el);
-      const rect = el.getBoundingClientRect();
-      return (
-        style.display !== 'none' &&
-        style.visibility !== 'hidden' &&
-        style.opacity !== '0' &&
-        rect.width > 16 &&
-        rect.height > 12 &&
-        rect.bottom > 0 &&
-        rect.right > 0 &&
-        rect.top < window.innerHeight &&
-        rect.left < window.innerWidth
-      );
-    };
-
-    const textNodes = Array.from(document.querySelectorAll('button, a, [role="button"], span, div'))
-      .filter((node) => node instanceof HTMLElement)
-      .map((node) => {
-        const text = normalize(node.innerText || node.textContent);
-        return { node, text };
-      })
-      .filter((item) => item.text && item.text.length <= 60);
-
-    const expiredNodes = textNodes.filter((item) => hasAny(item.text, expiredKeywords));
-    if (!forceRefresh && expiredNodes.length === 0) {
-      return { clicked: false, reason: 'not_expired' };
-    }
-
-    const searchRoots = [];
-    for (const item of expiredNodes) {
-      const root = item.node.closest('section, article, form, dialog, div') || item.node;
-      if (root && !searchRoots.includes(root)) {
-        searchRoots.push(root);
-      }
-    }
-    if (forceRefresh || searchRoots.length === 0) {
-      searchRoots.push(document.body);
-    }
-
-    for (const root of searchRoots) {
-      const candidates = Array.from(root.querySelectorAll('button, a, [role="button"], span, div'))
-        .filter((node) => node instanceof HTMLElement);
-      for (const node of candidates) {
-        const text = normalize(node.innerText || node.textContent);
-        if (!text || text.length > 40 || !hasAny(text, refreshKeywords)) {
-          continue;
-        }
-        const target = node.closest('button, a, [role="button"]') || node;
-        if (!(target instanceof HTMLElement) || !isVisible(target)) {
-          continue;
-        }
-        target.click();
-        return { clicked: true, text: text.slice(0, 40), reason: forceRefresh ? 'forced' : 'expired' };
-      }
-    }
-
-    return { clicked: false, reason: expiredNodes.length > 0 ? 'expired_no_button' : 'no_button' };
-  }, QR_EXPIRED_KEYWORDS, QR_REFRESH_KEYWORDS, force);
-}
-
-async function refreshExpiredQr(page, reason = 'expired_text') {
-  if (!canAttemptRefresh()) {
-    return false;
-  }
-
-  const refreshResult = await tryClickQrRefreshControl(page, reason === 'stale_age');
-  if (refreshResult.clicked) {
-    state.refreshCount += 1;
-    updateState({
-      status: 'refreshing_qr',
-      message: `Refreshing QR (${reason}): ${refreshResult.text || 'button clicked'}`,
-    });
-    broadcastStatus();
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    return true;
-  }
-
-  // Fallback: switch back to QR tab to trigger regenerate.
-  const switched = await clickByKeywords(page, siteKeywords.qrTabKeywords);
-  if (switched.clicked) {
-    state.refreshCount += 1;
-    updateState({
-      status: 'refreshing_qr',
-      message: `Refreshing QR by re-opening QR tab: ${switched.text}`,
-    });
-    broadcastStatus();
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    return true;
-  }
-
-  return false;
-}
-
-async function findBestQrElement(page) {
-  const candidates = await page.$$('img, canvas');
-  let best = null;
-  let bestScore = -1;
-
-  for (const candidate of candidates) {
-    const meta = await candidate.evaluate((el) => {
-      const rect = el.getBoundingClientRect();
-      const style = window.getComputedStyle(el);
-      const parentText = (el.parentElement?.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
-      const src = el.tagName.toLowerCase() === 'img' ? (el.getAttribute('src') || '') : '';
-      return {
-        width: rect.width,
-        height: rect.height,
-        x: rect.x,
-        y: rect.y,
-        viewportW: window.innerWidth,
-        viewportH: window.innerHeight,
-        visible: style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0',
-        src,
-        parentText,
-        ancestorText: (() => {
-          let txt = '';
-          let cur = el.parentElement;
-          for (let i = 0; i < 4 && cur; i += 1) {
-            txt += ` ${cur.innerText || ''}`;
-            cur = cur.parentElement;
-          }
-          return txt.replace(/\s+/g, ' ').trim().toLowerCase();
-        })(),
-        tag: el.tagName.toLowerCase(),
-      };
-    });
-
-    if (!meta.visible || meta.width < 90 || meta.height < 90 || meta.width > 420 || meta.height > 420) {
-      await candidate.dispose();
-      continue;
-    }
-
-    const ratio = meta.width / meta.height;
-    if (ratio < 0.8 || ratio > 1.25) {
-      await candidate.dispose();
-      continue;
-    }
-
-    let score = 0;
-    if (meta.src.startsWith('data:image/')) {
-      score += 6;
-    }
-    if (meta.src.toLowerCase().includes('qr') || meta.src.toLowerCase().includes('qrcode')) {
-      score += 4;
-    }
-    if (siteKeywords.qrHintKeywords.some((k) => meta.parentText.includes(k))) {
-      score += 3;
-    }
-    if (siteKeywords.qrHintKeywords.some((k) => meta.ancestorText.includes(k))) {
-      score += 2;
-    }
-    if (meta.tag === 'canvas') {
-      score += 2;
-    }
-    // Prefer center-ish area where login QR is usually shown.
-    const centerX = meta.viewportW / 2;
-    const centerY = meta.viewportH / 2;
-    const qrCenterX = meta.x + meta.width / 2;
-    const qrCenterY = meta.y + meta.height / 2;
-    const dist = Math.hypot(qrCenterX - centerX, qrCenterY - centerY);
-    score += Math.max(0, 3 - dist / 260);
-    score += Math.max(0, 2 - Math.abs(meta.width - meta.height) / 40);
-
-    if (score > bestScore) {
-      if (best) {
-        await best.dispose();
-      }
-      best = candidate;
-      bestScore = score;
-    } else {
-      await candidate.dispose();
-    }
-  }
-
-  if (bestScore < MIN_QR_SCORE) {
-    if (best) {
-      await best.dispose();
-    }
-    return null;
-  }
-
-  return best;
-}
-
-async function captureAndPublishQr(page) {
-  const qrElement = await findBestQrElement(page);
-  if (!qrElement) {
-    updateState({
-      status: 'waiting_qr',
-      message: 'Waiting for QR code in login popup...',
-      qrAvailable: false,
-      qrHash: '',
-      qrDataUrl: '',
-      qrFile: '',
-      qrCapturedAt: 0,
-      qrAgeMs: 0,
-    });
-    broadcastStatus();
-    return { found: false, changed: false };
-  }
-
-  const buffer = await qrElement.screenshot({ type: 'png' });
-  await qrElement.dispose();
-
-  const hash = crypto.createHash('sha256').update(buffer).digest('hex');
-  const changed = hash !== state.qrHash;
-
-  updateState({
-    status: 'qr_ready',
-    message: changed ? 'New QR code captured' : 'QR code is up to date',
-    qrAvailable: true,
-    qrHash: hash,
-    qrDataUrl: `data:image/png;base64,${buffer.toString('base64')}`,
-    qrFile: CURRENT_QR_FILE,
-    qrCapturedAt: changed ? Date.now() : state.qrCapturedAt || Date.now(),
-    qrAgeMs: changed ? 0 : Math.max(0, Date.now() - (state.qrCapturedAt || Date.now())),
-    lastError: '',
+  const manager = new QRMonitorManager({ rootDir: __dirname });
+  const session = await manager.startSession({
+    targetDomain,
+    monitorPort,
+    debugPort,
+    pollIntervalMs: Number(process.env.QR_POLL_MS || 1000),
+    qrMaxAgeMs: Number(process.env.QR_MAX_AGE_MS || 45000),
+    qrRefreshCooldownMs: Number(process.env.QR_REFRESH_COOLDOWN_MS || 3500),
+    minQrScore: Number(process.env.QR_MIN_SCORE || 6),
+    qrFile: cliOptions.qrFile || process.env.QR_CURRENT_FILENAME,
   });
 
-  fs.writeFileSync(CURRENT_QR_FILE, buffer);
-  if (changed) {
-    fs.writeFileSync(path.join(LOG_DIR, toTimestampFilename()), buffer);
-    broadcast('qr', {
-      ...getPublicState(),
-      qrDataUrl: state.qrDataUrl,
-    });
-  }
-  broadcastStatus();
-  return { found: true, changed };
-}
-
-async function monitorTick() {
-  if (monitorBusy) {
-    return;
-  }
-  monitorBusy = true;
-
-  try {
-    await connectBrowser();
-    if (!browser || !browser.connected) {
-      return;
-    }
-
-    const page = await getTargetPage();
-    if (!page) {
-      updateState({
-        status: 'waiting_page',
-        message: 'Connected, but no active page found',
-      });
-      broadcastStatus();
-      return;
-    }
-
-    updateState({
-      pageUrl: page.url(),
-    });
-
-    const hasModal = await ensureLoginModalOpen(page);
-    if (!hasModal) {
-      const hasLogin = await hasLoginButton(page, siteKeywords.loginButtonKeywords);
-      if (hasLogin) {
-        updateState({
-          status: 'waiting_login_modal',
-          message: 'Login button detected, trying to locate QR on page',
-        });
-      } else {
-        updateState({
-          status: 'logged_in',
-          message: 'No login popup detected; account may already be logged in',
-        });
-      }
-      broadcastStatus();
-      // Continue anyway: some sites (e.g. Taobao) use dedicated login pages with QR instead of modal.
-    }
-
-    await ensureQrTab(page);
-
-    if (await hasExpiredQrText(page)) {
-      await refreshExpiredQr(page, 'expired_text');
-    }
-
-    const captureResult = await captureAndPublishQr(page);
-    if (captureResult.found && state.qrCapturedAt) {
-      const ageMs = Date.now() - state.qrCapturedAt;
-      if (ageMs > QR_MAX_AGE_MS) {
-        updateState({
-          status: 'stale_qr',
-          message: `QR older than ${Math.floor(QR_MAX_AGE_MS / 1000)}s, auto refreshing...`,
-          qrAgeMs: ageMs,
-        });
-        broadcastStatus();
-        const refreshed = await refreshExpiredQr(page, 'stale_age');
-        if (refreshed) {
-          await captureAndPublishQr(page);
-        }
-      }
-    }
-  } catch (error) {
-    updateState({
-      status: 'error',
-      message: 'Monitor loop failed',
-      lastError: String(error.message || error),
-    });
-    broadcastStatus();
-  } finally {
-    monitorBusy = false;
-  }
-}
-
-function createApp() {
   const app = express();
+  const clients = new Set();
   app.use(cors());
 
+  function broadcast(event, payload) {
+    for (const res of clients) {
+      sendSseEvent(res, event, payload);
+    }
+  }
+
+  session.on('status', (payload) => {
+    broadcast('status', payload);
+  });
+  session.on('qr', (payload) => {
+    broadcast('qr', payload);
+  });
+
   app.get('/api/status', (_req, res) => {
-    res.json(getPublicState());
+    res.json(session.getPublicState());
   });
 
   app.get('/api/qr/current', (_req, res) => {
-    res.json({
-      ...getPublicState(),
-      qrDataUrl: state.qrDataUrl || null,
-    });
+    res.json(session.getCurrentQrPayload());
   });
 
   app.get('/api/qr/image', (_req, res) => {
-    if (!fs.existsSync(CURRENT_QR_FILE)) {
+    const qr = session.getCurrentQrPayload();
+    if (!qr.qrFile) {
       res.status(404).json({ error: 'QR image not ready' });
       return;
     }
-    res.sendFile(CURRENT_QR_FILE);
+    res.sendFile(path.resolve(qr.qrFile));
   });
 
   app.get('/api/qr/stream', (req, res) => {
@@ -821,12 +175,11 @@ function createApp() {
     res.flushHeaders?.();
 
     clients.add(res);
-    sendSseEvent(res, 'status', getPublicState());
-    if (state.qrDataUrl) {
-      sendSseEvent(res, 'qr', {
-        ...getPublicState(),
-        qrDataUrl: state.qrDataUrl,
-      });
+    sendSseEvent(res, 'status', session.getPublicState());
+
+    const current = session.getCurrentQrPayload();
+    if (current.qrDataUrl) {
+      sendSseEvent(res, 'qr', current);
     }
 
     const heartbeat = setInterval(() => {
@@ -838,6 +191,15 @@ function createApp() {
       clients.delete(res);
       res.end();
     });
+  });
+
+  app.post('/api/refresh', async (_req, res) => {
+    try {
+      const result = await session.requestRefresh(true);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: String(error.message || error) });
+    }
   });
 
   app.get('/qr', (_req, res) => {
@@ -856,9 +218,10 @@ function createApp() {
     </style>
   </head>
   <body>
-    <h2>${TARGET_DOMAIN} Login QR</h2>
+    <h2>${targetDomain} Login QR</h2>
     <div class="meta">Endpoint: <code>/api/qr/stream</code></div>
-    <div class="meta">Monitor: <code>${PORT}</code> · Debug: <code>${DEBUG_PORT}</code></div>
+    <div class="meta">Session: <code>${session.sessionId}</code></div>
+    <div class="meta">Monitor: <code>${monitorPort}</code> · Debug: <code>${debugPort}</code></div>
     <div id="status" class="status">Connecting...</div>
     <div><img id="qr" alt="QR code" /></div>
     <div class="hint">QR 会自动刷新。若显示过期，服务会自动尝试点击刷新。</div>
@@ -900,35 +263,21 @@ function createApp() {
 </html>`);
   });
 
-  return app;
-}
-
-async function main() {
-  ensureDirs();
-
-  const app = createApp();
-  app.listen(PORT, () => {
+  app.listen(monitorPort, () => {
     const ips = localIps();
-    console.log(`QR Monitor listening on http://127.0.0.1:${PORT}/qr`);
+    console.log(`QR Monitor listening on http://127.0.0.1:${monitorPort}/qr`);
     for (const ip of ips) {
-      console.log(`LAN access: http://${ip}:${PORT}/qr`);
+      console.log(`LAN access: http://${ip}:${monitorPort}/qr`);
     }
-    console.log(`Target domain: ${TARGET_DOMAIN}`);
-    console.log(`Expect browser debug port at 127.0.0.1:${DEBUG_PORT}`);
-    console.log(`Current QR file: ${CURRENT_QR_FILE}`);
+    console.log(`Target domain: ${targetDomain}`);
+    console.log(`Expect browser debug port at 127.0.0.1:${debugPort}`);
+    console.log(`Current QR file: ${session.getCurrentQrPayload().qrFile || '(pending)'}`);
   });
-
-  setInterval(() => {
-    void monitorTick();
-  }, POLL_INTERVAL_MS);
-  void monitorTick();
 
   process.on('SIGINT', async () => {
     console.log('\nShutting down QR monitor...');
     try {
-      if (browser && browser.connected) {
-        await browser.disconnect();
-      }
+      await manager.stopAll();
     } catch (_error) {
       // noop
     }

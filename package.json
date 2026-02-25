@@ -15,6 +15,7 @@
     "dev": "ts-node src/index.ts",
     "login": "node bin/insta.js login",
     "qr:monitor": "node qr-monitor-server.js",
+    "mcp:qr": "node qr-monitor-mcp-server.js",
     "server": "node src/server.js",
     "dev:server": "node --watch src/server.js"
   },
