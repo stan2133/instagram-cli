@@ -43,6 +43,7 @@
 ├── login.js                    # Instagram 浏览器登录脚本
 ├── login_web.js                # 通用网站登录脚本（MCP 场景）
 ├── search-user.js              # Instagram 用户搜索与跳转脚本
+├── fetch-user-posts.js         # 按账号抓取帖子信息脚本（复用登录态）
 ├── qr-monitor-server.js        # 登录二维码监听服务（HTTP + SSE）
 ├── graphql-monitor.js          # GraphQL 请求监听脚本
 ├── docs/                       # 补充文档
@@ -169,6 +170,38 @@ node search-user.js "coco" --limit 10 --open 2
 # 跳转到指定用户名
 node search-user.js "coco" --open cocogauff
 ```
+
+## Fetch User Posts
+
+用于在已登录 Instagram 会话中，按账号 URL 或用户名抓取帖子信息。
+
+先启动并完成登录（与 `search-user.js` 相同）：
+
+```bash
+node login.js
+```
+
+```bash
+# URL 方式
+node fetch-user-posts.js "https://www.instagram.com/nike/" --limit 12 --output ./logs/nike-posts.json
+
+# 用户名方式
+node fetch-user-posts.js "nike" --limit 24 --output ./logs/nike-posts-24.json
+
+# 抓取 20 条帖子
+node fetch-user-posts.js "https://www.instagram.com/nike/" --limit 20 --output ./logs/nike-posts-20.json
+```
+
+常用参数：
+- `--limit <n>`：返回帖子上限（默认 `12`，最大 `200`）
+- `--output <file>`：将结果保存为 JSON 文件
+- `--debug-port <port>`：回退连接调试端口（默认 `9222`）
+- `--keep-connected`：抓取完成后不主动断开浏览器连接
+
+返回结构包含：
+- `profile`：账号信息（粉丝数、关注数、简介、认证状态等）
+- `posts[]`：帖子信息（shortcode、链接、caption、like/comment、发布时间、媒体 URL）
+- `meta`：抓取时间与数量统计
 
 ## Session Storage
 
