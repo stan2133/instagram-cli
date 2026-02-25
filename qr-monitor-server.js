@@ -17,6 +17,8 @@ const PORT = Number(process.env.QR_MONITOR_PORT || 3999);
 const DEBUG_PORT = Number(process.env.DEBUG_PORT || 9222);
 const TARGET_DOMAIN = (process.env.TARGET_DOMAIN || 'douyin.com').toLowerCase();
 const POLL_INTERVAL_MS = Number(process.env.QR_POLL_MS || 1000);
+const QR_MAX_AGE_MS = Number(process.env.QR_MAX_AGE_MS || 45000);
+const QR_REFRESH_COOLDOWN_MS = Number(process.env.QR_REFRESH_COOLDOWN_MS || 3500);
 
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
 const LOG_DIR = path.join(__dirname, 'logs');
@@ -55,6 +57,10 @@ const state = {
   qrHash: '',
   qrDataUrl: '',
   qrFile: '',
+  qrCapturedAt: 0,
+  qrAgeMs: 0,
+  lastRefreshAttemptAt: 0,
+  refreshCount: 0,
 };
 
 function ensureDirs() {
@@ -90,6 +96,7 @@ function getSiteKeywords(domain) {
 }
 
 function getPublicState() {
+  const qrAgeMs = state.qrCapturedAt ? Math.max(0, Date.now() - state.qrCapturedAt) : 0;
   return {
     status: state.status,
     message: state.message,
@@ -98,6 +105,9 @@ function getPublicState() {
     targetDomain: state.targetDomain,
     qrAvailable: state.qrAvailable,
     qrFile: state.qrFile,
+    qrAgeMs,
+    qrAgeSec: Math.floor(qrAgeMs / 1000),
+    refreshCount: state.refreshCount,
     lastError: state.lastError,
     lastUpdateAt: state.lastUpdateAt,
   };
@@ -327,39 +337,119 @@ async function ensureQrTab(page) {
   }
 }
 
-async function refreshExpiredQr(page) {
-  const expired = await page.evaluate((expiredKeywords, refreshKeywords) => {
+async function hasExpiredQrText(page) {
+  return page.evaluate((expiredKeywords) => {
+    const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const bodyText = normalize(document.body?.innerText || '');
+    return expiredKeywords.some((word) => bodyText.includes(word.toLowerCase()));
+  }, QR_EXPIRED_KEYWORDS);
+}
+
+function canAttemptRefresh() {
+  const now = Date.now();
+  if (now - state.lastRefreshAttemptAt < QR_REFRESH_COOLDOWN_MS) {
+    return false;
+  }
+  state.lastRefreshAttemptAt = now;
+  return true;
+}
+
+async function tryClickQrRefreshControl(page, force = false) {
+  return page.evaluate((expiredKeywords, refreshKeywords, forceRefresh) => {
     const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
     const hasAny = (text, words) => words.some((w) => text.includes(w.toLowerCase()));
-    const bodyText = normalize(document.body?.innerText || '');
-    if (!hasAny(bodyText, expiredKeywords)) {
-      return { refreshed: false };
+    const isVisible = (el) => {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        style.opacity !== '0' &&
+        rect.width > 16 &&
+        rect.height > 12 &&
+        rect.bottom > 0 &&
+        rect.right > 0 &&
+        rect.top < window.innerHeight &&
+        rect.left < window.innerWidth
+      );
+    };
+
+    const textNodes = Array.from(document.querySelectorAll('button, a, [role="button"], span, div'))
+      .filter((node) => node instanceof HTMLElement)
+      .map((node) => {
+        const text = normalize(node.innerText || node.textContent);
+        return { node, text };
+      })
+      .filter((item) => item.text && item.text.length <= 60);
+
+    const expiredNodes = textNodes.filter((item) => hasAny(item.text, expiredKeywords));
+    if (!forceRefresh && expiredNodes.length === 0) {
+      return { clicked: false, reason: 'not_expired' };
     }
 
-    const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], span, div'));
-    for (const node of nodes) {
-      const text = normalize(node.innerText || node.textContent);
-      if (!text || !hasAny(text, refreshKeywords)) {
-        continue;
+    const searchRoots = [];
+    for (const item of expiredNodes) {
+      const root = item.node.closest('section, article, form, dialog, div') || item.node;
+      if (root && !searchRoots.includes(root)) {
+        searchRoots.push(root);
       }
-      const target = node.closest('button, a, [role="button"]') || node;
-      if (target instanceof HTMLElement) {
+    }
+    if (forceRefresh || searchRoots.length === 0) {
+      searchRoots.push(document.body);
+    }
+
+    for (const root of searchRoots) {
+      const candidates = Array.from(root.querySelectorAll('button, a, [role="button"], span, div'))
+        .filter((node) => node instanceof HTMLElement);
+      for (const node of candidates) {
+        const text = normalize(node.innerText || node.textContent);
+        if (!text || text.length > 40 || !hasAny(text, refreshKeywords)) {
+          continue;
+        }
+        const target = node.closest('button, a, [role="button"]') || node;
+        if (!(target instanceof HTMLElement) || !isVisible(target)) {
+          continue;
+        }
         target.click();
-        return { refreshed: true, text: text.slice(0, 40) };
+        return { clicked: true, text: text.slice(0, 40), reason: forceRefresh ? 'forced' : 'expired' };
       }
     }
 
-    return { refreshed: false };
-  }, QR_EXPIRED_KEYWORDS, QR_REFRESH_KEYWORDS);
+    return { clicked: false, reason: expiredNodes.length > 0 ? 'expired_no_button' : 'no_button' };
+  }, QR_EXPIRED_KEYWORDS, QR_REFRESH_KEYWORDS, force);
+}
 
-  if (expired.refreshed) {
+async function refreshExpiredQr(page, reason = 'expired_text') {
+  if (!canAttemptRefresh()) {
+    return false;
+  }
+
+  const refreshResult = await tryClickQrRefreshControl(page, reason === 'stale_age');
+  if (refreshResult.clicked) {
+    state.refreshCount += 1;
     updateState({
       status: 'refreshing_qr',
-      message: `QR expired, clicked refresh: ${expired.text || ''}`,
+      message: `Refreshing QR (${reason}): ${refreshResult.text || 'button clicked'}`,
     });
     broadcastStatus();
     await new Promise((resolve) => setTimeout(resolve, 1000));
+    return true;
   }
+
+  // Fallback: switch back to QR tab to trigger regenerate.
+  const switched = await clickByKeywords(page, siteKeywords.qrTabKeywords);
+  if (switched.clicked) {
+    state.refreshCount += 1;
+    updateState({
+      status: 'refreshing_qr',
+      message: `Refreshing QR by re-opening QR tab: ${switched.text}`,
+    });
+    broadcastStatus();
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return true;
+  }
+
+  return false;
 }
 
 async function findBestQrElement(page) {
@@ -463,9 +553,11 @@ async function captureAndPublishQr(page) {
       qrHash: '',
       qrDataUrl: '',
       qrFile: '',
+      qrCapturedAt: 0,
+      qrAgeMs: 0,
     });
     broadcastStatus();
-    return;
+    return { found: false, changed: false };
   }
 
   const buffer = await qrElement.screenshot({ type: 'png' });
@@ -481,6 +573,8 @@ async function captureAndPublishQr(page) {
     qrHash: hash,
     qrDataUrl: `data:image/png;base64,${buffer.toString('base64')}`,
     qrFile: CURRENT_QR_FILE,
+    qrCapturedAt: changed ? Date.now() : state.qrCapturedAt || Date.now(),
+    qrAgeMs: changed ? 0 : Math.max(0, Date.now() - (state.qrCapturedAt || Date.now())),
     lastError: '',
   });
 
@@ -493,6 +587,7 @@ async function captureAndPublishQr(page) {
     });
   }
   broadcastStatus();
+  return { found: true, changed };
 }
 
 async function monitorTick() {
@@ -540,8 +635,27 @@ async function monitorTick() {
     }
 
     await ensureQrTab(page);
-    await refreshExpiredQr(page);
-    await captureAndPublishQr(page);
+
+    if (await hasExpiredQrText(page)) {
+      await refreshExpiredQr(page, 'expired_text');
+    }
+
+    const captureResult = await captureAndPublishQr(page);
+    if (captureResult.found && state.qrCapturedAt) {
+      const ageMs = Date.now() - state.qrCapturedAt;
+      if (ageMs > QR_MAX_AGE_MS) {
+        updateState({
+          status: 'stale_qr',
+          message: `QR older than ${Math.floor(QR_MAX_AGE_MS / 1000)}s, auto refreshing...`,
+          qrAgeMs: ageMs,
+        });
+        broadcastStatus();
+        const refreshed = await refreshExpiredQr(page, 'stale_age');
+        if (refreshed) {
+          await captureAndPublishQr(page);
+        }
+      }
+    }
   } catch (error) {
     updateState({
       status: 'error',
