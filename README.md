@@ -16,6 +16,7 @@
 - Session 运维命令（检查、修复、删除）
 - 基础媒体命令（`photo:upload`）
 - MCP 集成（连接已打开浏览器进行自动化）
+- 二维码监听服务（自动抓取/刷新/推送登录二维码）
 
 ## Tech Stack
 
@@ -41,6 +42,7 @@
 ├── src/                        # 源码目录（当前以测试内容为主）
 ├── login.js                    # Instagram 浏览器登录脚本
 ├── login_web.js                # 通用网站登录脚本（MCP 场景）
+├── qr-monitor-server.js        # 登录二维码监听服务（HTTP + SSE）
 ├── graphql-monitor.js          # GraphQL 请求监听脚本
 ├── docs/                       # 补充文档
 └── package.json
@@ -131,6 +133,7 @@ node login_web.js https://www.instagram.com
 
 - Session 文件目录：`~/.instagram-cli/sessions/`
 - 支持多账户，通过 `--account <name>` 区分
+- 二维码固定输出：`logs/qr-current.png`
 
 ## Scripts
 
@@ -139,7 +142,70 @@ npm run build
 npm test
 npm run test:coverage
 npm run lint
+npm run qr:monitor
 ```
+
+## QR Monitor Service
+
+用于解决二维码容易过期的问题。服务会持续监听当前登录弹窗，自动抓取最新二维码并实时推送。
+
+### 1) 先打开目标网站登录页
+
+```bash
+node login_web.js https://www.douyin.com
+```
+
+### 2) 启动监听服务
+
+```bash
+npm run qr:monitor
+```
+
+指定目标域名（例如淘宝）：
+
+```bash
+TARGET_DOMAIN=taobao.com npm run qr:monitor
+```
+
+默认地址：
+- 本机：`http://127.0.0.1:3999/qr`
+- 局域网：启动日志会打印 `http://<你的IP>:3999/qr`，手机可直接访问扫码
+
+### 3) 服务行为
+
+- 自动尝试点击登录按钮
+- 自动切换到“扫码登录”
+- 自动检测二维码过期并尝试点击刷新
+- 二维码更新后立即推送到页面（SSE）
+
+站点适配说明：
+- 抖音：默认支持
+- 淘宝：使用 `TARGET_DOMAIN=taobao.com`
+- 即梦（`jimeng.jianying.com`）：已适配“开启xx”类登录按钮关键词（如“开启即梦”“立即开启”）
+
+### 4) API
+
+- `GET /api/status`：当前监听状态
+- `GET /api/qr/current`：当前二维码（包含 `qrDataUrl`）
+- `GET /api/qr/image`：当前二维码 PNG 文件
+- `GET /api/qr/stream`：SSE 实时事件流
+- `GET /qr`：内置二维码查看页面
+
+### 5) 淘宝登录示例
+
+```bash
+node login_web.js https://www.taobao.com
+TARGET_DOMAIN=taobao.com npm run qr:monitor
+```
+
+### 6) 即梦登录示例
+
+```bash
+node login_web.js https://jimeng.jianying.com/
+TARGET_DOMAIN=jianying.com npm run qr:monitor
+```
+
+提示：即梦首页如果没直接弹出二维码，可先点击“开启xx”入口，监听服务会继续追踪并抓取二维码。
 
 ## Troubleshooting
 

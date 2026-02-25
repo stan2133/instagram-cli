@@ -27,12 +27,390 @@ const SITE_CONFIGS = {
   'github.com': {
     authCookieName: 'logged_in',
     loginIndicators: ['[data-test-selector="profile"]'],
+  },
+  'jianying.com': {
+    authCookieName: null,
+    loginIndicators: [],
+    loginButtonKeywords: ['登录', '注册', '开启', '立即开启', '开启创作', '开始创作', '马上体验'],
+    qrTabKeywords: ['扫码登录', '二维码登录', '扫码快捷登录', '扫码', '二维码'],
+    qrHintKeywords: ['扫码', '二维码', 'qr', 'qrcode', 'scan'],
   }
 };
+
+const LOGIN_BUTTON_KEYWORDS = [
+  '登录',
+  '登錄',
+  '登入',
+  'login',
+  'log in',
+  'sign in',
+];
+
+const QR_CODE_SELECTORS = [
+  'img[src*="qrcode"]',
+  'img[src*="qr"]',
+  'img[alt*="二维码"]',
+  'img[alt*="QR"]',
+  'canvas[class*="qr"]',
+  'canvas[id*="qr"]',
+  '[class*="qrcode"] img',
+  '[class*="qr-code"] img',
+  '[data-e2e*="qrcode"] img',
+];
+
+const QR_CONTAINER_KEYWORDS = [
+  '二维码',
+  '扫码',
+  'scan',
+  'qr code',
+  'qrcode',
+];
+
+const QR_TAB_KEYWORDS = [
+  '扫码登录',
+  '二维码登录',
+  'qr login',
+  'scan login',
+];
+
+function mergeKeywords(primary, fallback) {
+  const merged = [...(primary || []), ...(fallback || [])];
+  return Array.from(new Set(merged.filter(Boolean)));
+}
 
 // 确保 session 目录存在
 if (!fs.existsSync(SESSION_DIR)) {
   fs.mkdirSync(SESSION_DIR, { recursive: true });
+}
+
+function toFileSafeDomain(domain) {
+  return domain.replace(/[^a-zA-Z0-9.-]/g, '').replace(/\./g, '-');
+}
+
+async function isElementVisible(element) {
+  return element.evaluate((el) => {
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      style.opacity !== '0' &&
+      rect.width > 24 &&
+      rect.height > 24
+    );
+  });
+}
+
+/**
+ * 自动检测并点击登录按钮
+ */
+async function tryAutoClickLoginButton(page, inputKeywords = LOGIN_BUTTON_KEYWORDS) {
+  const keywords = inputKeywords.map((keyword) => keyword.toLowerCase());
+  const clickResult = await page.evaluate((needles) => {
+    const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const matchesLoginText = (text) => {
+      if (!text || text.length > 40) {
+        return false;
+      }
+      return needles.some((needle) => text.includes(needle));
+    };
+    const isLikelyActionElement = (el) => {
+      if (!(el instanceof HTMLElement)) {
+        return false;
+      }
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'button' || tag === 'a') {
+        return true;
+      }
+      if (el.getAttribute('role') === 'button') {
+        return true;
+      }
+      if (el.getAttribute('onclick') || el.getAttribute('tabindex')) {
+        return true;
+      }
+      const style = window.getComputedStyle(el);
+      return style.cursor === 'pointer';
+    };
+    const isVisible = (el) => {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        rect.width > 30 &&
+        rect.height > 16 &&
+        rect.width < Math.min(window.innerWidth * 0.7, 420) &&
+        rect.height < 120 &&
+        rect.bottom > 0 &&
+        rect.right > 0 &&
+        rect.top < window.innerHeight &&
+        rect.left < window.innerWidth
+      );
+    };
+    const getClickable = (el) => el.closest('button, a, [role="button"]') || el;
+    const primaryCandidates = Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]'));
+    const fallbackCandidates = Array.from(document.querySelectorAll('div, span'));
+    const candidates = [...primaryCandidates, ...fallbackCandidates];
+
+    for (const node of candidates) {
+      const text = normalize(node.innerText || node.textContent);
+      if (!matchesLoginText(text)) {
+        continue;
+      }
+
+      const target = getClickable(node);
+      if (!(target instanceof HTMLElement) || !isLikelyActionElement(target) || !isVisible(target)) {
+        continue;
+      }
+
+      target.click();
+      return { clicked: true, text: text.slice(0, 80), tag: target.tagName.toLowerCase() };
+    }
+
+    return { clicked: false };
+  }, keywords);
+
+  return clickResult;
+}
+
+async function findQrElement(page) {
+  // Domain-specific first: prefer finding QR inside login popup on Douyin.
+  const douyinModal = await page.$('.douyin_login_new_class');
+  if (douyinModal) {
+    const popupCandidates = await douyinModal.$$('img, canvas');
+    let best = null;
+    let bestScore = -1;
+
+    for (const candidate of popupCandidates) {
+      const meta = await candidate.evaluate((el) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        const parentText = (el.parentElement?.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const src = el.tagName.toLowerCase() === 'img' ? (el.getAttribute('src') || '') : '';
+        return {
+          width: rect.width,
+          height: rect.height,
+          visible: style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0',
+          src,
+          parentText,
+        };
+      });
+
+      if (!meta.visible || meta.width < 120 || meta.height < 120 || meta.width > 360 || meta.height > 360) {
+        continue;
+      }
+
+      const ratio = meta.width / meta.height;
+      if (ratio < 0.8 || ratio > 1.25) {
+        continue;
+      }
+
+      let score = 0;
+      if (meta.src.startsWith('data:image/')) {
+        score += 5;
+      }
+      if (meta.src.toLowerCase().includes('qr') || meta.src.toLowerCase().includes('qrcode')) {
+        score += 4;
+      }
+      if (meta.parentText.includes('扫码') || meta.parentText.includes('二维码') || meta.parentText.includes('scan')) {
+        score += 3;
+      }
+      score += Math.max(0, 2 - Math.abs(meta.width - meta.height) / 40);
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = candidate;
+      } else {
+        await candidate.dispose();
+      }
+    }
+
+    await douyinModal.dispose();
+    if (best) {
+      return { element: best, source: 'douyin-popup-candidate' };
+    }
+  }
+
+  for (const selector of QR_CODE_SELECTORS) {
+    const element = await page.$(selector);
+    if (!element) {
+      continue;
+    }
+
+    const visible = await isElementVisible(element).catch(() => false);
+    if (visible) {
+      return { element, source: `selector:${selector}` };
+    }
+  }
+
+  const qrContainerHandle = await page.evaluateHandle((keywords) => {
+    const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const isVisible = (el) => {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        rect.width > 80 &&
+        rect.height > 80
+      );
+    };
+
+    const containers = Array.from(document.querySelectorAll('dialog, section, aside, div'));
+    for (const container of containers) {
+      const text = normalize(container.innerText || container.textContent);
+      if (!text || !keywords.some((keyword) => text.includes(keyword))) {
+        continue;
+      }
+
+      if (!isVisible(container)) {
+        continue;
+      }
+
+      const qrCandidate = container.querySelector('img, canvas');
+      if (qrCandidate && isVisible(qrCandidate)) {
+        return qrCandidate;
+      }
+    }
+
+    return null;
+  }, QR_CONTAINER_KEYWORDS);
+
+  const qrContainerElement = qrContainerHandle.asElement();
+  if (qrContainerElement) {
+    return { element: qrContainerElement, source: 'container-text' };
+  }
+
+  await qrContainerHandle.dispose();
+  return null;
+}
+
+async function trySwitchToQrTab(page, inputKeywords = QR_TAB_KEYWORDS) {
+  const keywords = inputKeywords.map((keyword) => keyword.toLowerCase());
+  const result = await page.evaluate((needles) => {
+    const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const isVisible = (el) => {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        rect.width > 28 &&
+        rect.height > 16 &&
+        rect.bottom > 0 &&
+        rect.right > 0 &&
+        rect.top < window.innerHeight &&
+        rect.left < window.innerWidth
+      );
+    };
+
+    const candidates = Array.from(document.querySelectorAll('button, a, [role="button"], div, span'));
+    for (const node of candidates) {
+      const text = normalize(node.innerText || node.textContent);
+      if (!text || !needles.some((needle) => text.includes(needle))) {
+        continue;
+      }
+
+      const target = node.closest('button, a, [role="button"]') || node;
+      if (!(target instanceof HTMLElement) || !isVisible(target)) {
+        continue;
+      }
+
+      target.click();
+      return { switched: true, text: text.slice(0, 80) };
+    }
+
+    return { switched: false };
+  }, keywords);
+
+  return result;
+}
+
+/**
+ * 检测二维码并保存图片
+ */
+async function tryCaptureLoginQrCode(page, domain) {
+  const maxAttempts = 20;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const found = await findQrElement(page);
+    if (found && found.element) {
+      const qrPath = path.join(SESSION_DIR, `login-qr-${toFileSafeDomain(domain)}-${Date.now()}.png`);
+      await found.element.screenshot({ path: qrPath });
+      await found.element.dispose();
+      return { qrPath, source: found.source };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return null;
+}
+
+/**
+ * 打开页面后自动处理登录入口和二维码
+ */
+async function autoHandleLoginEntry(page, domain, config = {}) {
+  const loginKeywords = mergeKeywords(config.loginButtonKeywords, LOGIN_BUTTON_KEYWORDS);
+  const qrTabKeywords = mergeKeywords(config.qrTabKeywords, QR_TAB_KEYWORDS);
+
+  console.log('🤖 尝试自动点击登录按钮...');
+  const clickResult = await tryAutoClickLoginButton(page, loginKeywords);
+
+  if (!clickResult.clicked) {
+    console.log('⚠️  未自动找到登录按钮，请手动点击登录。');
+    return null;
+  }
+
+  if (clickResult.tag) {
+    console.log(`✓ 已自动点击登录入口: <${clickResult.tag}> ${clickResult.text}`);
+  } else {
+    console.log(`✓ 已自动点击登录入口: ${clickResult.text}`);
+  }
+  try {
+    await page.waitForNavigation({
+      waitUntil: 'networkidle2',
+      timeout: 8000,
+    });
+    console.log('✓ 已检测到登录入口触发页面跳转');
+  } catch (_error) {
+    // No navigation is also acceptable (e.g. modal popup in same page).
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  let switched;
+  try {
+    switched = await trySwitchToQrTab(page, qrTabKeywords);
+  } catch (error) {
+    if ((error.message || '').includes('Execution context was destroyed')) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      switched = await trySwitchToQrTab(page, qrTabKeywords).catch(() => ({ switched: false }));
+    } else {
+      throw error;
+    }
+  }
+  if (switched && switched.switched) {
+    console.log(`✓ 已切换到二维码登录: ${switched.text}`);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+  }
+
+  console.log('🔍 检测是否出现二维码登录弹窗...');
+  let qrResult;
+  try {
+    qrResult = await tryCaptureLoginQrCode(page, domain);
+  } catch (error) {
+    if ((error.message || '').includes('Execution context was destroyed')) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      qrResult = await tryCaptureLoginQrCode(page, domain).catch(() => null);
+    } else {
+      throw error;
+    }
+  }
+  if (!qrResult) {
+    console.log('⚠️  未检测到二维码弹窗，你可以手动切换到二维码登录。');
+    return null;
+  }
+
+  console.log(`✅ 二维码已保存: ${qrResult.qrPath}`);
+  console.log(`   检测来源: ${qrResult.source}`);
+  return qrResult;
 }
 
 /**
@@ -249,6 +627,9 @@ async function login(targetUrl) {
       waitUntil: 'networkidle2',
       timeout: 60000
     });
+
+    // 自动点击登录并尝试保存二维码
+    await autoHandleLoginEntry(page, domain, config);
 
     console.log('⏳ 等待你完成登录...\n');
 
