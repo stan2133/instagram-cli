@@ -44,6 +44,7 @@
 ├── login_web.js                # 通用网站登录脚本（MCP 场景）
 ├── search-user.js              # Instagram 用户搜索与跳转脚本
 ├── fetch-user-posts.js         # 按账号抓取帖子信息脚本（复用登录态）
+├── fetch-post-hot-comments.js  # 按单帖抓取热评脚本（复用登录态）
 ├── qr-monitor-server.js        # 登录二维码监听服务（HTTP + SSE）
 ├── graphql-monitor.js          # GraphQL 请求监听脚本
 ├── docs/                       # 补充文档
@@ -202,6 +203,33 @@ node fetch-user-posts.js "https://www.instagram.com/nike/" --limit 20 --output .
 - `profile`：账号信息（粉丝数、关注数、简介、认证状态等）
 - `posts[]`：帖子信息（shortcode、链接、caption、like/comment、发布时间、媒体 URL）
 - `meta`：抓取时间与数量统计
+
+## Fetch Post Hot Comments
+
+用于在已登录 Instagram 会话中，按单篇帖子 URL（或 shortcode）抓取热评数据。
+
+```bash
+# 先确保已登录
+node login.js
+
+# 抓取某帖前 20 条热评
+node fetch-post-hot-comments.js "https://www.instagram.com/p/DVEQd9PjhJH/" --limit 20 --output ./logs/hot-comments-DVEQd9PjhJH-20.json
+
+# 只保留点赞 >= 50 的热评
+node fetch-post-hot-comments.js "DVEQd9PjhJH" --limit 50 --min-likes 50 --output ./logs/hot-comments-min50.json
+```
+
+常用参数：
+- `--limit <n>`：热评数量上限（默认 `20`，最大 `200`）
+- `--min-likes <n>`：过滤最小点赞数（默认 `0`）
+- `--include-replies`：包含每条评论的预览回复
+- `--output <file>`：将结果保存为 JSON 文件
+- `--debug-port <port>`：回退连接调试端口（默认 `9222`）
+
+返回结构包含：
+- `post`：帖子信息（shortcode、mediaPk、caption、like/comment、发布时间）
+- `hotComments[]`：热评列表（rank、score、like/reply、作者信息、评论文本）
+- `meta`：抓取时间、请求数量、实际数量、排序模式
 
 ## Session Storage
 
