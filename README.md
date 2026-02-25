@@ -42,6 +42,7 @@
 ├── src/                        # 源码目录（当前以测试内容为主）
 ├── login.js                    # Instagram 浏览器登录脚本
 ├── login_web.js                # 通用网站登录脚本（MCP 场景）
+├── search-user.js              # Instagram 用户搜索与跳转脚本
 ├── qr-monitor-server.js        # 登录二维码监听服务（HTTP + SSE）
 ├── graphql-monitor.js          # GraphQL 请求监听脚本
 ├── docs/                       # 补充文档
@@ -130,6 +131,44 @@ node login_web.js https://www.instagram.com --debug-port 9222
 
 2. 保持浏览器与脚本运行
 3. 使用仓库中的 `mcp_config.json` / `MCP_SETUP.md` 完成 MCP 配置
+
+## Search User
+
+用于在已登录的 Instagram 页面中搜索用户，并可直接跳转到指定结果。
+
+### 1) 启动并保持 Instagram 登录会话
+
+```bash
+node login.js
+```
+
+### 2) 执行搜索
+
+```bash
+node search-user.js "coco"
+```
+
+常用参数：
+- `--limit <n>`：返回结果上限（默认 `10`，最大 `50`）
+- `--output <file>`：将结果保存为 JSON 文件
+- `--open <index|user>`：从结果中跳转到指定用户（序号从 `1` 开始，或直接传用户名）
+- `--debug-port <port>`：回退连接调试端口（默认 `9222`）
+- `--keep-connected`：搜索完成后不主动断开浏览器连接
+
+说明：`--limit` 是上限，实际返回数量受 Instagram 当前搜索接口结果限制，可能少于上限。
+
+示例：
+
+```bash
+# 搜索并保存结果
+node search-user.js "coco" --limit 10 --output ./logs/search-user-coco.json
+
+# 跳转到第 2 个结果
+node search-user.js "coco" --limit 10 --open 2
+
+# 跳转到指定用户名
+node search-user.js "coco" --open cocogauff
+```
 
 ## Session Storage
 

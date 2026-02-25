@@ -53,6 +53,7 @@ function printUsage() {
   console.log('Options:');
   console.log('  --limit <n>            返回结果上限 (默认 10，最大 50)');
   console.log('  --output <file>        将结果保存为 JSON 文件');
+  console.log('  --open <index|user>    从搜索结果中按序号或用户名跳转');
   console.log('  --debug-port <port>    回退连接调试端口 (默认 9222)');
   console.log('  --keep-connected       搜索完成后不主动断开浏览器连接');
   console.log('  -h, --help             查看帮助');
@@ -60,6 +61,8 @@ function printUsage() {
   console.log('示例:');
   console.log('  node search-user.js "coco"');
   console.log('  node search-user.js "travel" --limit 20 --output ./search-results.json');
+  console.log('  node search-user.js "coco" --open 2');
+  console.log('  node search-user.js "coco" --open cocogauff');
   console.log('  node search-user.js "nike" --debug-port 9333');
 }
 
@@ -68,6 +71,7 @@ function parseCliArgs(argv) {
     query: '',
     limit: DEFAULT_LIMIT,
     output: '',
+    open: '',
     keepConnected: false,
     debugPort: DEFAULT_DEBUG_PORT,
     help: false,
@@ -120,6 +124,22 @@ function parseCliArgs(argv) {
 
     if (arg.startsWith('--output=')) {
       options.output = arg.slice('--output='.length);
+      continue;
+    }
+
+    if (arg === '--open') {
+      const value = argv[i + 1];
+      if (!value) {
+        options.error = '参数 --open 缺少值';
+        return options;
+      }
+      options.open = value;
+      i += 1;
+      continue;
+    }
+
+    if (arg.startsWith('--open=')) {
+      options.open = arg.slice('--open='.length);
       continue;
     }
 
@@ -365,10 +385,29 @@ async function inputSearchQuery(page, selector, query) {
   await new Promise((resolve) => setTimeout(resolve, 1200));
 }
 
-async function extractSearchResults(page, limit) {
-  const rawUsers = await page.evaluate((maxCount) => {
+function mergeUniqueUsers(target, batch, limit, seen) {
+  for (const user of batch) {
+    const key = String(user?.username || '').trim().toLowerCase();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    target.push(user);
+    if (target.length >= limit) {
+      break;
+    }
+  }
+}
+
+async function extractVisibleUsersFromDialog(page, limit) {
+  return page.evaluate((maxCount) => {
     const users = [];
     const seen = new Set();
+    const ignoredTexts = new Set(['主页', '搜索', 'reels', '探索', '通知', '消息']);
+    const reserved = new Set([
+      'accounts', 'about', 'api', 'challenge', 'developer', 'direct', 'emails', 'explore',
+      'graphql', 'legal', 'oauth', 'p', 'press', 'privacy', 'reel', 'reels', 'stories', 'tv', 'web',
+    ]);
 
     const isVisible = (el) => {
       if (!(el instanceof HTMLElement)) {
@@ -385,12 +424,17 @@ async function extractSearchResults(page, limit) {
       );
     };
 
-    const anchors = Array.from(document.querySelectorAll('a[href]'));
+    const searchDialog = document.querySelector('[role="dialog"]');
+    const searchContainer = searchDialog || document.body;
+    const anchors = Array.from(searchContainer.querySelectorAll('a[href]'));
     for (const anchor of anchors) {
       if (users.length >= maxCount) {
         break;
       }
       if (!isVisible(anchor)) {
+        continue;
+      }
+      if (anchor.closest('nav')) {
         continue;
       }
 
@@ -401,23 +445,23 @@ async function extractSearchResults(page, limit) {
       }
 
       const username = m[1];
-      const reserved = [
-        'accounts', 'about', 'api', 'challenge', 'developer', 'direct', 'emails', 'explore',
-        'graphql', 'legal', 'oauth', 'p', 'press', 'privacy', 'reel', 'reels', 'stories', 'tv', 'web',
-      ];
-      if (reserved.includes(username.toLowerCase())) {
-        continue;
-      }
-      if (seen.has(username.toLowerCase())) {
+      const key = username.toLowerCase();
+      if (reserved.has(key) || seen.has(key)) {
         continue;
       }
 
       const img = anchor.querySelector('img');
+      if (!img) {
+        continue;
+      }
+
       const spans = Array.from(anchor.querySelectorAll('span'))
         .map((el) => (el.textContent || '').trim())
-        .filter(Boolean);
-      const displayName = spans[0] || username;
-      const fullName = spans.find((s, i) => i > 0 && s !== username) || '';
+        .filter((text) => text && !ignoredTexts.has(text.toLowerCase()));
+      const displayName =
+        spans.find((text) => text.toLowerCase() === key) ||
+        username;
+      const fullName = spans.find((text) => text !== displayName) || '';
 
       const hasVerified = Boolean(
         anchor.querySelector('svg[aria-label="Verified"]') ||
@@ -430,16 +474,174 @@ async function extractSearchResults(page, limit) {
         displayName,
         fullName,
         profileUrl: `https://www.instagram.com/${username}/`,
-        avatarUrl: img?.src || img?.getAttribute('data-src') || '',
+        avatarUrl: img.src || img.getAttribute('data-src') || '',
         isVerified: hasVerified,
       });
-      seen.add(username.toLowerCase());
+      seen.add(key);
     }
 
     return users;
   }, limit);
+}
 
-  return normalizeExtractedUsers(rawUsers, limit);
+async function scrollSearchResults(page) {
+  return page.evaluate(() => {
+    const dialog = document.querySelector('[role="dialog"]');
+    const root = dialog || document.body;
+
+    const candidates = [root, ...Array.from(root.querySelectorAll('*'))];
+    const scrollable = candidates.find((el) => {
+      if (!(el instanceof HTMLElement)) {
+        return false;
+      }
+      const style = window.getComputedStyle(el);
+      if (style.overflowY === 'hidden') {
+        return false;
+      }
+      return el.scrollHeight - el.clientHeight > 20;
+    });
+
+    if (!scrollable || !(scrollable instanceof HTMLElement)) {
+      const before = window.scrollY;
+      window.scrollBy(0, 420);
+      return window.scrollY > before;
+    }
+
+    const before = scrollable.scrollTop;
+    const delta = Math.max(320, Math.floor(scrollable.clientHeight * 0.85));
+    scrollable.scrollBy(0, delta);
+    return scrollable.scrollTop > before + 4;
+  });
+}
+
+async function fetchSearchUsersByApi(page, query, limit) {
+  return page.evaluate(async (keyword, maxCount) => {
+    try {
+      const url = `/api/v1/web/search/topsearch/?context=blended&query=${encodeURIComponent(keyword)}&count=${maxCount}`;
+      const res = await fetch(url, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'x-requested-with': 'XMLHttpRequest',
+        },
+      });
+      if (!res.ok) {
+        return [];
+      }
+
+      const data = await res.json();
+      const list = Array.isArray(data?.users) ? data.users : [];
+      const users = [];
+
+      for (const item of list) {
+        const u = item?.user || {};
+        const username = String(u.username || '').trim();
+        if (!username) {
+          continue;
+        }
+
+        const fullNameParts = [];
+        if (typeof u.full_name === 'string' && u.full_name.trim()) {
+          fullNameParts.push(u.full_name.trim());
+        }
+        if (typeof item?.social_context === 'string' && item.social_context.trim()) {
+          fullNameParts.push(item.social_context.trim());
+        }
+
+        users.push({
+          username,
+          displayName: username,
+          fullName: fullNameParts.join(' • '),
+          profileUrl: `https://www.instagram.com/${username}/`,
+          avatarUrl: String(u.profile_pic_url || '').trim(),
+          isVerified: Boolean(u.is_verified),
+        });
+
+        if (users.length >= maxCount) {
+          break;
+        }
+      }
+
+      return users;
+    } catch (_error) {
+      return [];
+    }
+  }, query, limit);
+}
+
+async function extractSearchResults(page, query, limit) {
+  const maxRounds = Math.max(4, Math.ceil(limit / 2) + 4);
+  const users = [];
+  const seen = new Set();
+  let noChangeRounds = 0;
+
+  for (let round = 0; round < maxRounds; round += 1) {
+    const beforeCount = users.length;
+    const batch = await extractVisibleUsersFromDialog(page, limit);
+    mergeUniqueUsers(users, batch, limit, seen);
+
+    if (users.length >= limit) {
+      break;
+    }
+
+    const didScroll = await scrollSearchResults(page);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    if (users.length === beforeCount || !didScroll) {
+      noChangeRounds += 1;
+    } else {
+      noChangeRounds = 0;
+    }
+
+    if (noChangeRounds >= 3) {
+      break;
+    }
+  }
+
+  if (users.length < limit) {
+    const apiUsers = await fetchSearchUsersByApi(page, query, limit);
+    mergeUniqueUsers(users, apiUsers, limit, seen);
+  }
+
+  return normalizeExtractedUsers(users, limit);
+}
+
+function pickTargetUser(results, openTarget) {
+  if (!openTarget) {
+    return null;
+  }
+  const list = Array.isArray(results) ? results : [];
+  if (!list.length) {
+    return null;
+  }
+
+  const raw = String(openTarget).trim();
+  if (!raw) {
+    return null;
+  }
+
+  if (/^\d+$/.test(raw)) {
+    const index = Number(raw) - 1;
+    if (index >= 0 && index < list.length) {
+      return list[index];
+    }
+    return null;
+  }
+
+  const target = raw.replace(/^@/, '').toLowerCase();
+  return list.find((u) => String(u.username || '').toLowerCase() === target) || null;
+}
+
+async function openTargetProfile(page, user) {
+  if (!user?.profileUrl) {
+    return false;
+  }
+  await page.goto(user.profileUrl, {
+    waitUntil: 'networkidle2',
+    timeout: 60000,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  return true;
 }
 
 async function searchUsers(query, options = {}) {
@@ -493,8 +695,12 @@ async function searchUsers(query, options = {}) {
     await page.keyboard.press('Enter').catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    const results = await extractSearchResults(page, limit);
+    const results = await extractSearchResults(page, query, limit);
     console.log(`✅ 找到 ${results.length} 个用户:\n`);
+
+    if (results.length < limit) {
+      console.log(`ℹ️  实际结果少于上限(${limit})，这通常由 Instagram 搜索接口当前返回条数决定。\n`);
+    }
 
     results.forEach((user, index) => {
       console.log(`${index + 1}. @${user.username}${user.isVerified ? ' ✓' : ''}`);
@@ -506,6 +712,17 @@ async function searchUsers(query, options = {}) {
       console.log(`   头像: ${user.avatarUrl || '未获取到'}`);
       console.log('');
     });
+
+    if (options.open) {
+      const targetUser = pickTargetUser(results, options.open);
+      if (!targetUser) {
+        console.log(`⚠️  未找到可跳转目标: ${options.open}`);
+      } else {
+        console.log(`🚀 正在跳转到: @${targetUser.username}`);
+        await openTargetProfile(page, targetUser);
+        console.log(`✅ 已打开: ${targetUser.profileUrl}\n`);
+      }
+    }
 
     return results;
   } finally {
@@ -552,6 +769,7 @@ async function main() {
   try {
     const results = await searchUsers(options.query, {
       limit: options.limit,
+      open: options.open,
       debugPort: options.debugPort,
       keepConnected: options.keepConnected,
     });
@@ -575,5 +793,6 @@ module.exports = {
   parseCliArgs,
   isProfilePath,
   normalizeExtractedUsers,
+  pickTargetUser,
   parsePort,
 };

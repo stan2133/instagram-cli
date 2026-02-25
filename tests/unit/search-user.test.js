@@ -4,6 +4,7 @@ const {
   parseCliArgs,
   isProfilePath,
   normalizeExtractedUsers,
+  pickTargetUser,
   parsePort,
 } = require('../../search-user');
 
@@ -33,6 +34,12 @@ describe('search-user cli parsing', () => {
   it('rejects unknown option', () => {
     const args = parseCliArgs(['coco', '--bad-option']);
     expect(args.error).toContain('未知参数');
+  });
+
+  it('parses open option', () => {
+    const args = parseCliArgs(['coco', '--open', '2']);
+    expect(args.error).toBe('');
+    expect(args.open).toBe('2');
   });
 });
 
@@ -84,5 +91,26 @@ describe('parsePort', () => {
   it('returns fallback for invalid port', () => {
     expect(parsePort('0', 9222)).toBe(9222);
     expect(parsePort('abc', 9222)).toBe(9222);
+  });
+});
+
+describe('pickTargetUser', () => {
+  const users = [
+    { username: 'cocogauff', profileUrl: 'https://www.instagram.com/cocogauff/' },
+    { username: 'coco_hu1029', profileUrl: 'https://www.instagram.com/coco_hu1029/' },
+  ];
+
+  it('picks by index (1-based)', () => {
+    expect(pickTargetUser(users, '2')).toEqual(users[1]);
+  });
+
+  it('picks by username', () => {
+    expect(pickTargetUser(users, 'cocogauff')).toEqual(users[0]);
+    expect(pickTargetUser(users, '@COCO_HU1029')).toEqual(users[1]);
+  });
+
+  it('returns null when no match', () => {
+    expect(pickTargetUser(users, '99')).toBeNull();
+    expect(pickTargetUser(users, 'nobody')).toBeNull();
   });
 });
