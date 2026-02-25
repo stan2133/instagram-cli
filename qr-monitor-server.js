@@ -13,16 +13,137 @@ const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
 
-const PORT = Number(process.env.QR_MONITOR_PORT || 3999);
-const DEBUG_PORT = Number(process.env.DEBUG_PORT || 9222);
-const TARGET_DOMAIN = (process.env.TARGET_DOMAIN || 'douyin.com').toLowerCase();
+function toFileSafeToken(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, '')
+    .replace(/[^a-z0-9.-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'site';
+}
+
+function parsePort(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function printUsage() {
+  console.log('使用方法: node qr-monitor-server.js [options]');
+  console.log('');
+  console.log('可选参数:');
+  console.log('  --target-domain <domain>   指定监控网站域名 (默认 douyin.com)');
+  console.log('  --port <port>              监听端口 (默认 3999)');
+  console.log('  --debug-port <port>        浏览器调试端口 (默认 9222)');
+  console.log('  --qr-file <filename>       当前二维码文件名 (默认按端口自动区分)');
+  console.log('  -h, --help                 显示帮助');
+  console.log('');
+  console.log('示例:');
+  console.log('  node qr-monitor-server.js --target-domain taobao.com --port 4001 --debug-port 9222');
+  console.log('  node qr-monitor-server.js --target-domain douyin.com --port 4002 --debug-port 9333');
+}
+
+function parseCliOptions(argv) {
+  const options = {
+    targetDomain: '',
+    monitorPort: '',
+    debugPort: '',
+    qrFile: '',
+    help: false,
+    error: '',
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--help' || arg === '-h') {
+      options.help = true;
+      continue;
+    }
+    if (arg === '--target-domain') {
+      options.targetDomain = argv[i + 1] || '';
+      if (!options.targetDomain) {
+        options.error = '参数 --target-domain 缺少域名';
+        return options;
+      }
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--target-domain=')) {
+      options.targetDomain = arg.slice('--target-domain='.length);
+      continue;
+    }
+    if (arg === '--port') {
+      options.monitorPort = argv[i + 1] || '';
+      if (!options.monitorPort) {
+        options.error = '参数 --port 缺少端口值';
+        return options;
+      }
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--port=')) {
+      options.monitorPort = arg.slice('--port='.length);
+      continue;
+    }
+    if (arg === '--debug-port') {
+      options.debugPort = argv[i + 1] || '';
+      if (!options.debugPort) {
+        options.error = '参数 --debug-port 缺少端口值';
+        return options;
+      }
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--debug-port=')) {
+      options.debugPort = arg.slice('--debug-port='.length);
+      continue;
+    }
+    if (arg === '--qr-file') {
+      options.qrFile = argv[i + 1] || '';
+      if (!options.qrFile) {
+        options.error = '参数 --qr-file 缺少文件名';
+        return options;
+      }
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--qr-file=')) {
+      options.qrFile = arg.slice('--qr-file='.length);
+      continue;
+    }
+    options.error = `未知参数: ${arg}`;
+    return options;
+  }
+  return options;
+}
+
+const cliOptions = parseCliOptions(process.argv.slice(2));
+if (cliOptions.help) {
+  printUsage();
+  process.exit(0);
+}
+if (cliOptions.error) {
+  console.error(`❌ ${cliOptions.error}\n`);
+  printUsage();
+  process.exit(1);
+}
+
+const PORT = parsePort(cliOptions.monitorPort || process.env.QR_MONITOR_PORT, 3999);
+const DEBUG_PORT = parsePort(cliOptions.debugPort || process.env.DEBUG_PORT, 9222);
+const TARGET_DOMAIN = (cliOptions.targetDomain || process.env.TARGET_DOMAIN || 'douyin.com').toLowerCase();
 const POLL_INTERVAL_MS = Number(process.env.QR_POLL_MS || 1000);
 const QR_MAX_AGE_MS = Number(process.env.QR_MAX_AGE_MS || 45000);
 const QR_REFRESH_COOLDOWN_MS = Number(process.env.QR_REFRESH_COOLDOWN_MS || 3500);
 
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
 const LOG_DIR = path.join(__dirname, 'logs');
-const CURRENT_QR_FILE = path.join(LOG_DIR, 'qr-current.png');
+const DEFAULT_QR_FILE = PORT === 3999
+  ? 'qr-current.png'
+  : `qr-current-${toFileSafeToken(TARGET_DOMAIN)}-${PORT}.png`;
+const CURRENT_QR_FILE = path.join(LOG_DIR, cliOptions.qrFile || process.env.QR_CURRENT_FILENAME || DEFAULT_QR_FILE);
 
 const LOGIN_BUTTON_KEYWORDS = ['登录', '登錄', '登入', 'login', 'log in', 'sign in'];
 const QR_TAB_KEYWORDS = ['扫码登录', '二维码登录', 'qr login', 'scan login'];
@@ -101,6 +222,8 @@ function getPublicState() {
     status: state.status,
     message: state.message,
     connected: state.connected,
+    monitorPort: PORT,
+    debugPort: DEBUG_PORT,
     pageUrl: state.pageUrl,
     targetDomain: state.targetDomain,
     qrAvailable: state.qrAvailable,
@@ -140,7 +263,7 @@ function toTimestampFilename() {
   const hh = String(d.getHours()).padStart(2, '0');
   const mi = String(d.getMinutes()).padStart(2, '0');
   const ss = String(d.getSeconds()).padStart(2, '0');
-  return `qr-${yyyy}${mm}${dd}-${hh}${mi}${ss}.png`;
+  return `qr-${toFileSafeToken(TARGET_DOMAIN)}-${PORT}-${yyyy}${mm}${dd}-${hh}${mi}${ss}.png`;
 }
 
 function localIps() {
@@ -733,8 +856,9 @@ function createApp() {
     </style>
   </head>
   <body>
-    <h2>Douyin Login QR</h2>
+    <h2>${TARGET_DOMAIN} Login QR</h2>
     <div class="meta">Endpoint: <code>/api/qr/stream</code></div>
+    <div class="meta">Monitor: <code>${PORT}</code> · Debug: <code>${DEBUG_PORT}</code></div>
     <div id="status" class="status">Connecting...</div>
     <div><img id="qr" alt="QR code" /></div>
     <div class="hint">QR 会自动刷新。若显示过期，服务会自动尝试点击刷新。</div>
@@ -789,7 +913,9 @@ async function main() {
     for (const ip of ips) {
       console.log(`LAN access: http://${ip}:${PORT}/qr`);
     }
+    console.log(`Target domain: ${TARGET_DOMAIN}`);
     console.log(`Expect browser debug port at 127.0.0.1:${DEBUG_PORT}`);
+    console.log(`Current QR file: ${CURRENT_QR_FILE}`);
   });
 
   setInterval(() => {

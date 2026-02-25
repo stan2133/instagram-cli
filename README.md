@@ -124,6 +124,8 @@ node dist/index.js photo:upload ./your-photo.jpg -c "Hello from CLI"
 
 ```bash
 node login_web.js https://www.instagram.com
+# 或指定调试端口（并行多站点时推荐）
+node login_web.js https://www.instagram.com --debug-port 9222
 ```
 
 2. 保持浏览器与脚本运行
@@ -133,7 +135,7 @@ node login_web.js https://www.instagram.com
 
 - Session 文件目录：`~/.instagram-cli/sessions/`
 - 支持多账户，通过 `--account <name>` 区分
-- 二维码固定输出：`logs/qr-current.png`
+- 二维码当前文件：默认 `logs/qr-current.png`（端口非 3999 时自动按端口区分）
 
 ## Scripts
 
@@ -149,10 +151,24 @@ npm run qr:monitor
 
 用于解决二维码容易过期的问题。服务会持续监听当前登录弹窗，自动抓取最新二维码并实时推送。
 
+### 并行多站点规则
+
+如果你要同时监听多个网站（例如淘宝 + 抖音），每个站点都需要独立的一组端口：
+
+- `login_web.js --debug-port <port>`：该站点浏览器调试端口
+- `qr-monitor-server.js --debug-port <port>`：必须与对应 `login_web` 端口一致
+- `qr-monitor-server.js --port <port>`：二维码服务 HTTP 端口，站点之间不能重复
+
+推荐固定映射（示例）：
+- 淘宝：`debug-port=9222`，`monitor-port=4001`
+- 抖音：`debug-port=9333`，`monitor-port=4002`
+
 ### 1) 先打开目标网站登录页
 
 ```bash
 node login_web.js https://www.douyin.com
+# 或指定调试端口
+node login_web.js https://www.douyin.com --debug-port 9222
 ```
 
 ### 2) 启动监听服务
@@ -165,7 +181,15 @@ npm run qr:monitor
 
 ```bash
 TARGET_DOMAIN=taobao.com npm run qr:monitor
+# 或使用 CLI 参数方式
+node qr-monitor-server.js --target-domain taobao.com --port 4001 --debug-port 9222
 ```
+
+常用参数说明：
+- `--target-domain`：优先选择该域名页面（也可用环境变量 `TARGET_DOMAIN`）
+- `--debug-port`：连接浏览器调试端口（也可用环境变量 `DEBUG_PORT`）
+- `--port`：监听服务端口（也可用环境变量 `QR_MONITOR_PORT`）
+- `--qr-file`：自定义当前二维码文件名（默认按端口自动区分）
 
 默认地址：
 - 本机：`http://127.0.0.1:3999/qr`
@@ -180,7 +204,7 @@ TARGET_DOMAIN=taobao.com npm run qr:monitor
 
 站点适配说明：
 - 抖音：默认支持
-- 淘宝：使用 `TARGET_DOMAIN=taobao.com`
+- 淘宝：使用 `TARGET_DOMAIN=taobao.com` 或 `--target-domain taobao.com`
 - 即梦（`jimeng.jianying.com`）：已适配“开启xx”类登录按钮关键词（如“开启即梦”“立即开启”）
 
 ### 4) API
@@ -194,15 +218,42 @@ TARGET_DOMAIN=taobao.com npm run qr:monitor
 ### 5) 淘宝登录示例
 
 ```bash
-node login_web.js https://www.taobao.com
-TARGET_DOMAIN=taobao.com npm run qr:monitor
+node login_web.js https://www.taobao.com --debug-port 9222
+TARGET_DOMAIN=taobao.com DEBUG_PORT=9222 QR_MONITOR_PORT=4001 npm run qr:monitor
 ```
 
-### 6) 即梦登录示例
+### 6) 抖音登录示例
 
 ```bash
-node login_web.js https://jimeng.jianying.com/
-TARGET_DOMAIN=jianying.com npm run qr:monitor
+node login_web.js https://www.douyin.com --debug-port 9333
+TARGET_DOMAIN=douyin.com DEBUG_PORT=9333 QR_MONITOR_PORT=4002 npm run qr:monitor
+```
+
+### 7) 同时登录淘宝和抖音（并行）
+
+终端 A（淘宝）：
+
+```bash
+node login_web.js https://www.taobao.com --debug-port 9222
+TARGET_DOMAIN=taobao.com DEBUG_PORT=9222 QR_MONITOR_PORT=4001 npm run qr:monitor
+```
+
+终端 B（抖音）：
+
+```bash
+node login_web.js https://www.douyin.com --debug-port 9333
+TARGET_DOMAIN=douyin.com DEBUG_PORT=9333 QR_MONITOR_PORT=4002 npm run qr:monitor
+```
+
+访问地址：
+- 淘宝二维码页：`http://127.0.0.1:4001/qr`
+- 抖音二维码页：`http://127.0.0.1:4002/qr`
+
+### 8) 即梦登录示例
+
+```bash
+node login_web.js https://jimeng.jianying.com/ --debug-port 9444
+TARGET_DOMAIN=jianying.com DEBUG_PORT=9444 QR_MONITOR_PORT=4003 npm run qr:monitor
 ```
 
 提示：即梦首页如果没直接弹出二维码，可先点击“开启xx”入口，监听服务会继续追踪并抓取二维码。

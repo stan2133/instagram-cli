@@ -9,10 +9,10 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const url = require('url');
 
 // Session 存储路径
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
+const DEFAULT_DEBUG_PORT = Number(process.env.DEBUG_PORT || 9222);
 
 // 网站配置
 const SITE_CONFIGS = {
@@ -72,6 +72,79 @@ const QR_TAB_KEYWORDS = [
   'qr login',
   'scan login',
 ];
+
+function parsePort(value) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    return null;
+  }
+  return n;
+}
+
+function printUsage() {
+  console.log('使用方法: node login_web.js <URL> [--debug-port <port>]');
+  console.log('');
+  console.log('示例:');
+  console.log('  node login_web.js https://www.instagram.com');
+  console.log('  node login_web.js https://www.taobao.com --debug-port 9222');
+  console.log('  DEBUG_PORT=9333 node login_web.js https://www.douyin.com');
+  console.log('');
+  console.log('注意: 登录后浏览器将保持打开状态，以便其他脚本使用');
+  console.log('      按 Ctrl+C 关闭浏览器和退出程序\n');
+}
+
+function parseCliOptions(argv) {
+  const options = {
+    targetUrl: '',
+    debugPort: DEFAULT_DEBUG_PORT,
+    help: false,
+    error: '',
+  };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--help' || arg === '-h') {
+      options.help = true;
+      continue;
+    }
+    if (arg === '--debug-port' || arg === '-p') {
+      const value = argv[i + 1];
+      if (!value) {
+        options.error = '参数 --debug-port 缺少端口值';
+        return options;
+      }
+      const parsed = parsePort(value);
+      if (!parsed) {
+        options.error = `无效端口: ${value}`;
+        return options;
+      }
+      options.debugPort = parsed;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--debug-port=')) {
+      const parsed = parsePort(arg.slice('--debug-port='.length));
+      if (!parsed) {
+        options.error = `无效端口: ${arg.slice('--debug-port='.length)}`;
+        return options;
+      }
+      options.debugPort = parsed;
+      continue;
+    }
+    if (arg.startsWith('-')) {
+      options.error = `未知参数: ${arg}`;
+      return options;
+    }
+    if (!options.targetUrl) {
+      options.targetUrl = arg;
+      continue;
+    }
+    options.error = `多余参数: ${arg}`;
+    return options;
+  }
+
+  return options;
+}
 
 function mergeKeywords(primary, fallback) {
   const merged = [...(primary || []), ...(fallback || [])];
@@ -418,8 +491,8 @@ async function autoHandleLoginEntry(page, domain, config = {}) {
  */
 function validateUrl(targetUrl) {
   try {
-    const parsed = url.parse(targetUrl);
-    if (!parsed.protocol || !parsed.protocol.match(/^https?:/)) {
+    const parsed = new URL(targetUrl);
+    if (!parsed.protocol.match(/^https?:$/)) {
       return null;
     }
     return parsed;
@@ -432,8 +505,7 @@ function validateUrl(targetUrl) {
  * 从 URL 提取域名
  */
 function extractDomain(targetUrl) {
-  const parsed = url.parse(targetUrl);
-  return parsed.hostname;
+  return new URL(targetUrl).hostname;
 }
 
 /**
@@ -562,7 +634,7 @@ async function detectLoginStatus(page, targetUrl, config) {
 /**
  * 登录网站
  */
-async function login(targetUrl) {
+async function login(targetUrl, options = {}) {
   let browser;
   try {
     // 验证 URL
@@ -576,9 +648,14 @@ async function login(targetUrl) {
 
     const domain = extractDomain(targetUrl);
     const config = getSiteConfig(domain);
+    const debugPort = parsePort(options.debugPort || DEFAULT_DEBUG_PORT);
+    if (!debugPort) {
+      throw new Error(`无效调试端口: ${options.debugPort}`);
+    }
 
     console.log('\n🌐 启动 Chrome 浏览器...\n');
     console.log(`📍 目标网站: ${domain}`);
+    console.log(`🧩 调试端口: ${debugPort}`);
     if (config.authCookieName) {
       console.log(`🔑 认证 Cookie: ${config.authCookieName}`);
     } else {
@@ -594,7 +671,7 @@ async function login(targetUrl) {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--remote-debugging-port=9222', // 启用远程调试端口
+        `--remote-debugging-port=${debugPort}`, // 启用远程调试端口
       ]
     });
 
@@ -676,7 +753,7 @@ async function login(targetUrl) {
     console.log(`  文件: ${browserInfoFile}\n`);
 
     // 生成 MCP 配置
-    generateMCPConfig(domain);
+    generateMCPConfig(domain, debugPort);
 
     // 显示登录信息
     console.log('═══════════════════════════════════════════════════════');
@@ -754,7 +831,7 @@ function waitForEnter() {
 /**
  * 生成 MCP 配置文件
  */
-function generateMCPConfig(domain) {
+function generateMCPConfig(domain, debugPort) {
   console.log('🔧 生成 MCP 配置文件...\n');
 
   const mcpConfig = {
@@ -763,7 +840,7 @@ function generateMCPConfig(domain) {
         command: "npx",
         args: ["-y", "puppeteer-mcp-server"],
         env: {
-          DEBUG_PORT: "9222"
+          DEBUG_PORT: String(debugPort)
         }
       }
     }
@@ -788,7 +865,7 @@ function generateMCPConfig(domain) {
   console.log(`   ${mcpConfigFile}\n`);
 
   console.log('📋 puppeteer-mcp-server 已配置:');
-  console.log(`   调试端口: 9222`);
+  console.log(`   调试端口: ${debugPort}`);
   console.log(`   目标网站: ${domain}\n`);
 
   console.log('📘 下一步：将配置添加到 Claude Desktop 或 Cursor\n');
@@ -843,22 +920,26 @@ function generateMCPConfig(domain) {
 
 // 主函数
 async function main() {
-  const targetUrl = process.argv[2];
+  const options = parseCliOptions(process.argv.slice(2));
+  const targetUrl = options.targetUrl;
 
-  if (!targetUrl) {
-    console.log('使用方法: node login_web.js <URL>');
-    console.log('');
-    console.log('示例:');
-    console.log('  node login_web.js https://www.instagram.com');
-    console.log('  node login_web.js https://twitter.com');
-    console.log('  node login_web.js https://github.com');
-    console.log('');
-    console.log('注意: 登录后浏览器将保持打开状态，以便其他脚本使用');
-    console.log('      按 Ctrl+C 关闭浏览器和退出程序\n');
+  if (options.help) {
+    printUsage();
+    process.exit(0);
+  }
+
+  if (options.error) {
+    console.error(`❌ ${options.error}\n`);
+    printUsage();
     process.exit(1);
   }
 
-  await login(targetUrl);
+  if (!targetUrl) {
+    printUsage();
+    process.exit(1);
+  }
+
+  await login(targetUrl, { debugPort: options.debugPort });
 }
 
 // 运行
