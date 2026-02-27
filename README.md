@@ -19,6 +19,7 @@
 - 二维码监听服务（自动抓取/刷新/推送登录二维码）
 - 自动化抓取账号关注列表（`fetch-user-following.js`）
 - 自动化提取账号最热 reels / posts 地址（`fetch-user-hot-media.js`）
+- 自动化下载最热内容媒体资源并生成 metadata（`download-hot-media-assets.js`）
 
 ## Tech Stack
 
@@ -48,6 +49,7 @@
 ├── fetch-user-posts.js         # 按账号抓取帖子信息脚本（复用登录态）
 ├── fetch-user-following.js     # 按账号抓取关注列表脚本（复用登录态）
 ├── fetch-user-hot-media.js     # 按账号计算最热 reels/posts 地址脚本
+├── download-hot-media-assets.js # 从 hot-media 结果下载全部媒体并生成 metadata
 ├── fetch-post-hot-comments.js  # 按单帖抓取热评脚本（复用登录态）
 ├── qr-monitor-server.js        # 登录二维码监听服务（HTTP + SSE）
 ├── graphql-monitor.js          # GraphQL 请求监听脚本
@@ -292,6 +294,45 @@ node fetch-user-hot-media.js "https://www.instagram.com/nike/" --scan-limit 120 
 执行建议：
 - `fetch-user-following.js` 与 `fetch-user-hot-media.js` 都会复用同一个浏览器登录会话，建议串行执行。
 - 如果并行运行两个脚本，可能出现 `net::ERR_ABORTED`（页面导航被另一个连接中断）。
+
+## Download Hot Media Assets
+
+用于读取 `fetch-user-hot-media.js` 的输出 JSON，并下载其中 reels/posts 对应的全部媒体资源（含轮播子项），同时生成 `metadata.json` 和 `errors.json`。
+
+```bash
+# 先确保已登录
+node login.js
+
+# 从 hot-media 结果下载全部媒体
+node download-hot-media-assets.js --input ./logs/test-hot-media-nike.json --output-dir ./downloads
+
+# 调试时只处理前 1 条帖子
+node download-hot-media-assets.js --input ./logs/test-hot-media-nike.json --output-dir ./downloads --max-posts 1
+
+# 通过代理下载（HTTP/SOCKS）
+node download-hot-media-assets.js --input ./logs/test-hot-media-nike.json --output-dir ./downloads --proxy http://127.0.0.1:7890
+```
+
+常用参数：
+- `--input <file>`：`fetch-user-hot-media` 输出 JSON（必填）
+- `--output-dir <dir>`：下载根目录（默认 `./downloads`）
+- `--concurrency <n>`：下载并发（默认 `2`，范围 `1~8`）
+- `--retry <n>`：单文件重试次数（默认 `3`）
+- `--timeout <ms>`：下载超时毫秒（默认 `60000`）
+- `--max-posts <n>`：仅处理前 n 条帖子（调试用）
+- `--proxy <url>`：下载代理地址（如 `http://127.0.0.1:7890`、`socks5://127.0.0.1:1080`）
+- `--overwrite`：覆盖已存在文件（默认跳过）
+- `--no-cover`：视频不下载封面图
+- `--debug-port <port>`：回退连接调试端口（默认 `9222`）
+
+输出结构示例：
+- `downloads/instagram/<username>/<capturedAt>/media/*`
+- `downloads/instagram/<username>/<capturedAt>/metadata.json`
+- `downloads/instagram/<username>/<capturedAt>/errors.json`
+
+网络前置条件：
+- 该脚本会请求 Instagram CDN（如 `scontent-*.cdninstagram.com`）。
+- 如果当前网络无法访问这些 CDN 域名，脚本会出现下载超时；此时可切换网络、代理或 VPN 后重试。
 
 ## Session Storage
 
