@@ -52,7 +52,6 @@
 ├── download-hot-media-assets.js # 从 hot-media 结果下载全部媒体并生成 metadata
 ├── fetch-post-hot-comments.js  # 按单帖抓取热评脚本（复用登录态）
 ├── qr-monitor-server.js        # 登录二维码监听服务（HTTP + SSE）
-├── graphql-monitor.js          # GraphQL 请求监听脚本
 ├── docs/                       # 补充文档
 └── package.json
 ```

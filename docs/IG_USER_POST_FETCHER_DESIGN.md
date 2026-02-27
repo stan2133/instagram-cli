@@ -63,7 +63,7 @@
 
 - 优先读取 `~/.instagram-cli/sessions/browser-info.json` 的 `webSocketDebuggerUrl`
 - 失败后回退 `http://127.0.0.1:<debugPort>` 连接
-- 该模式与 `search-user.js`、`graphql-monitor.js` 一致
+- 该模式与 `search-user.js` 一致
 
 这样用户只需先执行 `node login.js` 登录一次即可复用会话。
 
@@ -196,4 +196,3 @@ node fetch-user-posts.js "https://www.instagram.com/nike/" --limit 12 --output .
 - 选择器多路回退
 - 小并发抓取与重试
 - 结果缓存（可选）
-
