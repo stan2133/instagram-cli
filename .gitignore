@@ -9,12 +9,22 @@ build/
 
 # Environment variables
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 
 # Session files (security)
+.instagram-cli/
 sessions/
 *.session
+cookies*.json
+browser-session.json
+browser-endpoint.json
+*.pem
+*.key
+*.p12
+*.pfx
 # Allow specific JSON files
 *.json
 !package.json

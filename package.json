@@ -17,7 +17,10 @@
     "qr:monitor": "node qr-monitor-server.js",
     "mcp:qr": "node qr-monitor-mcp-server.js",
     "server": "node src/server.js",
-    "dev:server": "node --watch src/server.js"
+    "dev:server": "node --watch src/server.js",
+    "security:scan": "bash scripts/secret-scan.sh --tracked",
+    "security:scan:staged": "bash scripts/secret-scan.sh --staged",
+    "security:install-hooks": "bash scripts/install-git-hooks.sh"
   },
   "keywords": [
     "instagram",

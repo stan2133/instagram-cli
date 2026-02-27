@@ -64,6 +64,17 @@
 npm install
 ```
 
+### 1.5) Enable Security Hooks (recommended)
+
+```bash
+npm run security:install-hooks
+```
+
+说明：
+- `pre-commit`：只扫描已暂存文件，阻止疑似密钥进入提交。
+- `pre-push`：扫描当前仓库已跟踪文件，阻止疑似密钥推送到远端。
+- 手动全量扫描：`npm run security:scan`
+
 ### 2) Build
 
 ```bash
