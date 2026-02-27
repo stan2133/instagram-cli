@@ -5,6 +5,7 @@ const {
   parseCliArgs,
   normalizeTarget,
   mapMediaType,
+  resolvePostPathPrefix,
   normalizePost,
 } = require('../../fetch-user-posts');
 
@@ -111,6 +112,28 @@ describe('normalizePost', () => {
     expect(post.mediaUrls).toContain('https://video.mp4');
     expect(post.mediaUrls).toContain('https://cover.jpg');
   });
+
+  it('normalizes non-clips video post to /p/', () => {
+    const post = normalizePost({
+      code: 'VIDEO01',
+      media_type: 2,
+      product_type: 'feed',
+      video_versions: [{ url: 'https://video.mp4' }],
+      image_versions2: { candidates: [{ url: 'https://cover.jpg' }] },
+    }, 'nike');
+
+    expect(post.mediaType).toBe('video');
+    expect(post.postUrl).toBe('https://www.instagram.com/nike/p/VIDEO01/');
+  });
+});
+
+describe('resolvePostPathPrefix', () => {
+  it('maps by product type', () => {
+    expect(resolvePostPathPrefix({ product_type: 'clips' })).toBe('reel');
+    expect(resolvePostPathPrefix({ product_type: 'igtv' })).toBe('tv');
+    expect(resolvePostPathPrefix({ product_type: 'feed' })).toBe('p');
+    expect(resolvePostPathPrefix({})).toBe('p');
+  });
 });
 
 describe('parsePort', () => {
@@ -119,4 +142,3 @@ describe('parsePort', () => {
     expect(parsePort('0', 9222)).toBe(9222);
   });
 });
-

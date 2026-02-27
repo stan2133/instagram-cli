@@ -17,6 +17,8 @@
 - 基础媒体命令（`photo:upload`）
 - MCP 集成（连接已打开浏览器进行自动化）
 - 二维码监听服务（自动抓取/刷新/推送登录二维码）
+- 自动化抓取账号关注列表（`fetch-user-following.js`）
+- 自动化提取账号最热 reels / posts 地址（`fetch-user-hot-media.js`）
 
 ## Tech Stack
 
@@ -44,6 +46,8 @@
 ├── login_web.js                # 通用网站登录脚本（MCP 场景）
 ├── search-user.js              # Instagram 用户搜索与跳转脚本
 ├── fetch-user-posts.js         # 按账号抓取帖子信息脚本（复用登录态）
+├── fetch-user-following.js     # 按账号抓取关注列表脚本（复用登录态）
+├── fetch-user-hot-media.js     # 按账号计算最热 reels/posts 地址脚本
 ├── fetch-post-hot-comments.js  # 按单帖抓取热评脚本（复用登录态）
 ├── qr-monitor-server.js        # 登录二维码监听服务（HTTP + SSE）
 ├── graphql-monitor.js          # GraphQL 请求监听脚本
@@ -230,6 +234,64 @@ node fetch-post-hot-comments.js "DVEQd9PjhJH" --limit 50 --min-likes 50 --output
 - `post`：帖子信息（shortcode、mediaPk、caption、like/comment、发布时间）
 - `hotComments[]`：热评列表（rank、score、like/reply、作者信息、评论文本）
 - `meta`：抓取时间、请求数量、实际数量、排序模式
+
+## Fetch User Following
+
+用于在已登录 Instagram 会话中，按账号 URL 或用户名抓取关注列表。
+
+```bash
+# 先确保已登录
+node login.js
+
+# 抓取 nike 前 200 个关注对象
+node fetch-user-following.js "nike" --limit 200 --output ./logs/nike-following-200.json
+
+# URL 方式
+node fetch-user-following.js "https://www.instagram.com/nike/" --limit 100
+```
+
+常用参数：
+- `--limit <n>`：关注列表数量上限（默认 `50`，最大 `2000`）
+- `--output <file>`：将结果保存为 JSON 文件
+- `--debug-port <port>`：回退连接调试端口（默认 `9222`）
+- `--keep-connected`：抓取完成后不主动断开浏览器连接
+
+返回结构包含：
+- `profile`：账号基础信息（粉丝、关注、认证状态等）
+- `following[]`：关注列表（用户名、主页地址、是否私密/认证、关系状态）
+- `meta`：抓取时间、分页次数、是否还有更多数据
+
+## Fetch User Hot Media
+
+用于在已登录 Instagram 会话中，扫描某账号最近帖子并输出最热 reels / posts 地址。
+
+```bash
+# 先确保已登录
+node login.js
+
+# 默认扫描最近 60 条，输出最热 reels/post 各 5 条
+node fetch-user-hot-media.js "nike"
+
+# 扫描更多内容并保存结果
+node fetch-user-hot-media.js "https://www.instagram.com/nike/" --scan-limit 120 --top-reels 10 --top-posts 10 --output ./logs/nike-hot-media.json
+```
+
+常用参数：
+- `--scan-limit <n>`：扫描帖子上限（默认 `60`，最大 `200`）
+- `--top-reels <n>`：输出 reels 数量（默认 `5`，最大 `50`）
+- `--top-posts <n>`：输出 posts 数量（默认 `5`，最大 `50`）
+- `--output <file>`：将结果保存为 JSON 文件
+- `--debug-port <port>`：回退连接调试端口（默认 `9222`）
+- `--keep-connected`：执行完成后不主动断开浏览器连接
+
+返回结构包含：
+- `topReels[]` / `topPosts[]`：按热度排序后的内容明细（包含分数与地址）
+- `topReelUrls[]` / `topPostUrls[]`：可直接使用的地址列表
+- `meta`：扫描规模、实际返回数量、热度模型说明
+
+执行建议：
+- `fetch-user-following.js` 与 `fetch-user-hot-media.js` 都会复用同一个浏览器登录会话，建议串行执行。
+- 如果并行运行两个脚本，可能出现 `net::ERR_ABORTED`（页面导航被另一个连接中断）。
 
 ## Session Storage
 

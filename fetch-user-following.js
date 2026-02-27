@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 /**
- * Instagram User Posts Fetch Script
- * 在已登录的 Instagram 浏览器会话下，按账号主页 URL 拉取帖子信息
+ * Instagram User Following Fetch Script
+ * 在已登录 Instagram 浏览器会话下，按账号 URL 或用户名抓取其关注列表
  */
 
 'use strict';
@@ -14,8 +14,8 @@ const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
 const BROWSER_INFO_FILE = path.join(SESSION_DIR, 'browser-info.json');
 const INSTAGRAM_HOME = 'https://www.instagram.com/';
 const DEFAULT_DEBUG_PORT = Number(process.env.DEBUG_PORT || 9222);
-const DEFAULT_LIMIT = 12;
-const MAX_LIMIT = 200;
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 2000;
 const IG_WEB_APP_ID = '936619743392459';
 
 function parsePort(value, fallback = null) {
@@ -27,19 +27,19 @@ function parsePort(value, fallback = null) {
 }
 
 function printUsage() {
-  console.log('使用方法: node fetch-user-posts.js <Instagram账号URL|username> [options]');
+  console.log('使用方法: node fetch-user-following.js <Instagram账号URL|username> [options]');
   console.log('');
   console.log('Options:');
-  console.log(`  --limit <n>            返回帖子上限 (默认 ${DEFAULT_LIMIT}，最大 ${MAX_LIMIT})`);
+  console.log(`  --limit <n>            返回关注列表上限 (默认 ${DEFAULT_LIMIT}，最大 ${MAX_LIMIT})`);
   console.log('  --output <file>        将结果保存为 JSON 文件');
   console.log('  --debug-port <port>    回退连接调试端口 (默认 9222)');
   console.log('  --keep-connected       执行完成后不主动断开浏览器连接');
   console.log('  -h, --help             查看帮助');
   console.log('');
   console.log('示例:');
-  console.log('  node fetch-user-posts.js "https://www.instagram.com/nike/"');
-  console.log('  node fetch-user-posts.js "nike" --limit 24 --output ./logs/nike-posts.json');
-  console.log('  node fetch-user-posts.js "@nike" --debug-port 9333');
+  console.log('  node fetch-user-following.js "https://www.instagram.com/nike/"');
+  console.log('  node fetch-user-following.js "nike" --limit 200 --output ./logs/nike-following.json');
+  console.log('  node fetch-user-following.js "@nike" --debug-port 9333');
 }
 
 function parseCliArgs(argv) {
@@ -288,7 +288,7 @@ async function ensureLoggedInAtProfile(page, profileUrl) {
     waitUntil: 'networkidle2',
     timeout: 60000,
   });
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  await new Promise((resolve) => setTimeout(resolve, 1200));
 
   const currentUrl = page.url();
   if (currentUrl.includes('/accounts/login')) {
@@ -358,11 +358,6 @@ function parseProfileFromApi(user, profileUrl) {
   const followingCount = Number(user?.following_count) ||
     Number(user?.edge_follow?.count) ||
     0;
-  const bioLinks = Array.isArray(user?.bio_links)
-    ? user.bio_links
-      .map((item) => String(item?.url || item?.lynx_url || '').trim())
-      .filter(Boolean)
-    : [];
 
   return {
     id: String(user?.id || ''),
@@ -370,8 +365,6 @@ function parseProfileFromApi(user, profileUrl) {
     username: String(user?.username || ''),
     fullName: String(user?.full_name || ''),
     biography: String(user?.biography || ''),
-    externalUrl: String(user?.external_url || ''),
-    bioLinks,
     isPrivate: Boolean(user?.is_private),
     isVerified: Boolean(user?.is_verified),
     postsCount,
@@ -381,143 +374,80 @@ function parseProfileFromApi(user, profileUrl) {
   };
 }
 
-function mapMediaType(item) {
-  const mediaType = Number(item?.media_type);
-  if (mediaType === 8) {
-    return 'carousel';
-  }
-  if (mediaType === 2) {
-    return 'video';
-  }
-  return 'image';
-}
-
-function resolvePostPathPrefix(item) {
-  const productType = String(item?.product_type || '').toLowerCase();
-  if (productType === 'clips') {
-    return 'reel';
-  }
-  if (productType === 'igtv') {
-    return 'tv';
-  }
-  return 'p';
-}
-
-function pickPrimaryMediaUrl(item) {
-  const imageUrl = String(item?.image_versions2?.candidates?.[0]?.url || '');
-  const videoUrl = String(item?.video_versions?.[0]?.url || '');
-  if (videoUrl) {
-    return videoUrl;
-  }
-  return imageUrl;
-}
-
-function extractMediaUrls(item) {
-  const out = [];
-  const pushIf = (v) => {
-    const url = String(v || '').trim();
-    if (url && !out.includes(url)) {
-      out.push(url);
-    }
-  };
-
-  if (Array.isArray(item?.carousel_media) && item.carousel_media.length) {
-    for (const media of item.carousel_media) {
-      pushIf(media?.video_versions?.[0]?.url);
-      pushIf(media?.image_versions2?.candidates?.[0]?.url);
-    }
-    return out;
-  }
-
-  pushIf(item?.video_versions?.[0]?.url);
-  pushIf(item?.image_versions2?.candidates?.[0]?.url);
-  return out;
-}
-
-function normalizePost(item, username) {
-  const shortcode = String(item?.code || '').trim();
-  const mediaType = mapMediaType(item);
-  const pathPrefix = resolvePostPathPrefix(item);
-  const postUrl = shortcode ? `${INSTAGRAM_HOME}${username}/${pathPrefix}/${shortcode}/` : '';
-  const ts = Number(item?.taken_at || 0);
-  const caption = String(item?.caption?.text || '').trim();
-
+function normalizeFollowingUser(user) {
+  const username = String(user?.username || '').trim();
+  const friendship = user?.friendship_status || {};
   return {
-    id: String(item?.id || ''),
-    pk: String(item?.pk || ''),
-    shortcode,
-    postUrl,
-    mediaType,
-    productType: String(item?.product_type || ''),
-    caption,
-    likeCount: Number(item?.like_count || 0),
-    commentCount: Number(item?.comment_count || 0),
-    takenAt: ts > 0 ? new Date(ts * 1000).toISOString() : '',
-    takenAtUnix: ts > 0 ? ts : 0,
-    thumbnailUrl: String(item?.image_versions2?.candidates?.[0]?.url || ''),
-    primaryMediaUrl: pickPrimaryMediaUrl(item),
-    mediaUrls: extractMediaUrls(item),
-    isPinned: Boolean(item?.is_pinned),
-    hasAudio: Boolean(item?.has_audio),
-    playCount: Number(item?.play_count || 0),
-    viewCount: Number(item?.view_count || 0),
+    id: String(user?.pk || user?.id || ''),
+    username,
+    fullName: String(user?.full_name || ''),
+    profileUrl: username ? `${INSTAGRAM_HOME}${username}/` : '',
+    isPrivate: Boolean(user?.is_private),
+    isVerified: Boolean(user?.is_verified),
+    profilePicUrl: String(user?.profile_pic_url || ''),
+    followsViewer: Boolean(friendship?.followed_by),
+    followedByViewer: Boolean(friendship?.following),
+    hasRequestedByViewer: Boolean(friendship?.outgoing_request),
   };
 }
 
-async function fetchProfileAndPosts(page, username, limit) {
-  const profileJson = await fetchJsonInPage(
-    page,
-    `/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`
-  );
-
-  const user = profileJson?.data?.user;
-  if (!user) {
-    throw new Error(`未获取到账号信息: @${username}`);
-  }
-
-  const profileUrl = `${INSTAGRAM_HOME}${user.username || username}/`;
-  const profile = parseProfileFromApi(user, profileUrl);
-  const userId = profile.id;
-  if (!userId) {
-    throw new Error(`缺少用户 ID: @${profile.username || username}`);
-  }
-
-  const allItems = [];
+async function fetchUserFollowingList(page, userId, limit) {
+  const users = [];
+  const seen = new Set();
   let maxId = '';
-  let pageNo = 0;
+  let pages = 0;
+  let hasMore = false;
+  let nextCursor = '';
 
-  while (allItems.length < limit && pageNo < 40) {
-    const remaining = Math.max(1, limit - allItems.length);
-    const count = Math.min(12, remaining);
-    const query = maxId
-      ? `/api/v1/feed/user/${encodeURIComponent(userId)}/?count=${count}&max_id=${encodeURIComponent(maxId)}`
-      : `/api/v1/feed/user/${encodeURIComponent(userId)}/?count=${count}`;
-    const feedJson = await fetchJsonInPage(page, query);
-    const items = Array.isArray(feedJson?.items) ? feedJson.items : [];
+  while (users.length < limit && pages < 300) {
+    const remaining = Math.max(1, limit - users.length);
+    const count = Math.min(50, remaining);
 
-    if (!items.length) {
+    const qs = new URLSearchParams({
+      count: String(count),
+      search_surface: 'follow_list_page',
+    });
+    if (maxId) {
+      qs.set('max_id', maxId);
+    }
+
+    const apiUrl = `/api/v1/friendships/${encodeURIComponent(userId)}/following/?${qs.toString()}`;
+    const data = await fetchJsonInPage(page, apiUrl);
+    const list = Array.isArray(data?.users) ? data.users : [];
+
+    pages += 1;
+    for (const raw of list) {
+      const username = String(raw?.username || '').trim();
+      if (!username) {
+        continue;
+      }
+      const key = username.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      users.push(normalizeFollowingUser(raw));
+      if (users.length >= limit) {
+        break;
+      }
+    }
+
+    const cursor = String(data?.next_max_id || '').trim();
+    hasMore = Boolean(data?.big_list || data?.has_more || cursor);
+    if (!hasMore || !cursor || cursor === maxId) {
+      nextCursor = cursor;
       break;
     }
 
-    allItems.push(...items);
-    pageNo += 1;
-
-    const more = Boolean(feedJson?.more_available);
-    const nextMaxId = String(feedJson?.next_max_id || '').trim();
-    if (!more || !nextMaxId) {
-      break;
-    }
-    maxId = nextMaxId;
+    maxId = cursor;
+    nextCursor = cursor;
   }
 
-  const posts = allItems
-    .slice(0, limit)
-    .map((item) => normalizePost(item, profile.username || username))
-    .filter((post) => post.shortcode);
-
   return {
-    profile,
-    posts,
+    users: users.slice(0, limit),
+    pages,
+    hasMore,
+    nextCursor,
   };
 }
 
@@ -535,7 +465,7 @@ function saveResults(data, outputFile) {
   return absPath;
 }
 
-async function fetchUserPosts(target, options = {}) {
+async function fetchUserFollowing(target, options = {}) {
   const puppeteer = options.puppeteer || require('puppeteer');
   const limit = Number.isInteger(options.limit) ? options.limit : DEFAULT_LIMIT;
   const debugPort = parsePort(options.debugPort, DEFAULT_DEBUG_PORT);
@@ -545,7 +475,7 @@ async function fetchUserPosts(target, options = {}) {
   }
 
   console.log(`🎯 目标账号: @${normalized.username}`);
-  console.log(`📌 帖子上限: ${limit}\n`);
+  console.log(`📌 关注列表上限: ${limit}\n`);
 
   let browser;
   try {
@@ -561,21 +491,41 @@ async function fetchUserPosts(target, options = {}) {
     const page = await pickInstagramPage(browser);
     await ensureLoggedInAtProfile(page, normalized.profileUrl);
 
-    const result = await fetchProfileAndPosts(page, normalized.username, limit);
+    const profileJson = await fetchJsonInPage(
+      page,
+      `/api/v1/users/web_profile_info/?username=${encodeURIComponent(normalized.username)}`
+    );
+    const user = profileJson?.data?.user;
+    if (!user) {
+      throw new Error(`未获取到账号信息: @${normalized.username}`);
+    }
+
+    const profileUrl = `${INSTAGRAM_HOME}${user.username || normalized.username}/`;
+    const profile = parseProfileFromApi(user, profileUrl);
+    const userId = profile.id;
+    if (!userId) {
+      throw new Error(`缺少用户 ID: @${profile.username || normalized.username}`);
+    }
+
+    const followingData = await fetchUserFollowingList(page, userId, limit);
+
     const output = {
-      profile: result.profile,
-      posts: result.posts,
+      profile,
+      following: followingData.users,
       meta: {
         capturedAt: new Date().toISOString(),
         requestedLimit: limit,
-        actualCount: result.posts.length,
+        actualCount: followingData.users.length,
+        pagesFetched: followingData.pages,
+        hasMore: followingData.hasMore,
+        nextCursor: followingData.nextCursor,
       },
     };
 
     console.log(`✅ 账号: @${output.profile.username}`);
-    console.log(`✅ 抓取到 ${output.posts.length} 条帖子`);
-    if (output.posts.length < limit) {
-      console.log(`ℹ️  返回少于上限(${limit})，可能是账号实际帖子数量或权限限制`);
+    console.log(`✅ 抓取到 ${output.following.length} 个关注对象`);
+    if (output.following.length < limit) {
+      console.log(`ℹ️  返回少于上限(${limit})，可能已到列表末尾或权限受限`);
     }
     console.log('');
 
@@ -592,7 +542,6 @@ async function fetchUserPosts(target, options = {}) {
 
 async function main() {
   const options = parseCliArgs(process.argv.slice(2));
-
   if (options.help) {
     printUsage();
     process.exit(0);
@@ -608,7 +557,7 @@ async function main() {
   }
 
   try {
-    const data = await fetchUserPosts(options.target, {
+    const data = await fetchUserFollowing(options.target, {
       limit: options.limit,
       debugPort: options.debugPort,
       keepConnected: options.keepConnected,
@@ -634,8 +583,6 @@ module.exports = {
   parsePort,
   parseCliArgs,
   normalizeTarget,
-  mapMediaType,
-  resolvePostPathPrefix,
-  normalizePost,
-  fetchUserPosts,
+  normalizeFollowingUser,
+  fetchUserFollowing,
 };
