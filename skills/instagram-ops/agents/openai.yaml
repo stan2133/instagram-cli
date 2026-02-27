@@ -1,0 +1,4 @@
+interface:
+  display_name: "Instagram Ops"
+  short_description: "Run local Instagram automation workflows with session reuse"
+  default_prompt: "Use $instagram-ops to run repository Instagram scripts for fetching users/posts/following/comments and downloading media with metadata."
