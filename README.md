@@ -170,6 +170,32 @@ node login_web.js https://www.instagram.com --debug-port 9222
 - 遇到挑战页、频率限制、异常重定向时立即暂停任务，避免继续触发风控。
 - 使用测试账号验证流程，避免直接在主账号做高频自动化。
 
+内置防护（已实现）：
+
+- `search-user.js`
+- `fetch-user-posts.js`
+- `fetch-user-following.js`
+- `fetch-post-hot-comments.js`
+- `download-hot-media-assets.js`（帖子解析 API 阶段）
+
+默认策略：
+
+- 限速：每次请求最小间隔 `900ms` + 随机抖动 `0~600ms`
+- 熔断阈值：连续失败 `3` 次触发冷却
+- 熔断冷却：普通失败 `300s`，风险信号（如 `429/challenge/checkpoint/feedback`）`1800s`
+
+可通过环境变量调参：
+
+```bash
+IG_RATE_LIMIT_ENABLED=true
+IG_RATE_LIMIT_MIN_DELAY_MS=900
+IG_RATE_LIMIT_JITTER_MS=600
+IG_CIRCUIT_BREAKER_ENABLED=true
+IG_CIRCUIT_BREAKER_FAILURE_THRESHOLD=3
+IG_CIRCUIT_BREAKER_COOLDOWN_MS=300000
+IG_CIRCUIT_BREAKER_RISK_COOLDOWN_MS=1800000
+```
+
 ### 2) 使用 Application Chrome（浏览器路径问题）
 
 这是浏览器启动来源配置，与你的下载策略独立。当前支持：

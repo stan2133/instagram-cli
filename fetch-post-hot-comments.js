@@ -9,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { createInstagramRequestGuard } = require('./src/services/ig-request-guard');
 
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
 const BROWSER_INFO_FILE = path.join(SESSION_DIR, 'browser-info.json');
@@ -333,8 +334,8 @@ function buildApiHeaders() {
   };
 }
 
-async function fetchJsonInPage(page, apiUrl) {
-  const payload = await page.evaluate(async (url, headers) => {
+async function fetchJsonInPage(page, apiUrl, requestGuard) {
+  const runRequest = async () => page.evaluate(async (url, headers) => {
     try {
       const res = await fetch(url, {
         method: 'GET',
@@ -366,8 +367,12 @@ async function fetchJsonInPage(page, apiUrl) {
     }
   }, apiUrl, buildApiHeaders());
 
+  const payload = requestGuard
+    ? await requestGuard.run({ url: apiUrl, method: 'GET' }, runRequest)
+    : await runRequest();
+
   if (!payload.ok) {
-    throw new Error(`请求失败(${apiUrl}): ${payload.textHead || `${payload.status} ${payload.statusText}`}`);
+    throw new Error(`请求失败(${apiUrl}) status=${payload.status}: ${payload.textHead || `${payload.status} ${payload.statusText}`}`);
   }
   if (!payload.json || typeof payload.json !== 'object') {
     throw new Error(`接口返回非 JSON: ${apiUrl}`);
@@ -528,6 +533,7 @@ async function fetchCommentsForMedia(page, mediaPk, postMeta, options) {
   const limit = options.limit;
   const includeReplies = Boolean(options.includeReplies);
   const minLikes = Number(options.minLikes || 0);
+  const requestGuard = options.requestGuard;
 
   const comments = [];
   const seen = new Set();
@@ -545,7 +551,7 @@ async function fetchCommentsForMedia(page, mediaPk, postMeta, options) {
     }
 
     const url = `/api/v1/media/${encodeURIComponent(mediaPk)}/comments/?${qs.toString()}`;
-    const data = await fetchJsonInPage(page, url);
+    const data = await fetchJsonInPage(page, url, requestGuard);
     const list = Array.isArray(data?.comments) ? data.comments : [];
     if (!list.length) {
       break;
@@ -599,6 +605,10 @@ async function fetchPostHotComments(target, options = {}) {
   console.log(`🎯 目标帖子: ${normalized.postUrl}`);
   console.log(`📌 热评上限: ${limit}`);
   console.log(`🔎 最小点赞过滤: ${minLikes}\n`);
+  const requestGuard = createInstagramRequestGuard({
+    scriptName: 'fetch-post-hot-comments',
+  });
+  console.log(`🛡️ 请求防护: ${requestGuard.describe()}\n`);
 
   let browser;
   try {
@@ -621,7 +631,8 @@ async function fetchPostHotComments(target, options = {}) {
 
     const mediaInfoJson = await fetchJsonInPage(
       page,
-      `/api/v1/media/${encodeURIComponent(resolved.mediaPk)}/info/`
+      `/api/v1/media/${encodeURIComponent(resolved.mediaPk)}/info/`,
+      requestGuard
     );
     const mediaItem = mediaInfoJson?.items?.[0];
     if (!mediaItem) {
@@ -633,6 +644,7 @@ async function fetchPostHotComments(target, options = {}) {
       limit,
       minLikes,
       includeReplies: options.includeReplies,
+      requestGuard,
     });
 
     const result = {
@@ -724,4 +736,3 @@ module.exports = {
   rankHotComments,
   fetchPostHotComments,
 };
-

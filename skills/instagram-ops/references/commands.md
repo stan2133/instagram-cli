@@ -1,5 +1,19 @@
 # Commands
 
+## Request Guard Profile (Optional)
+
+Use before IG scripts when user asks for slower/safer behavior:
+
+```bash
+export IG_RATE_LIMIT_ENABLED=true
+export IG_RATE_LIMIT_MIN_DELAY_MS=1200
+export IG_RATE_LIMIT_JITTER_MS=800
+export IG_CIRCUIT_BREAKER_ENABLED=true
+export IG_CIRCUIT_BREAKER_FAILURE_THRESHOLD=2
+export IG_CIRCUIT_BREAKER_COOLDOWN_MS=600000
+export IG_CIRCUIT_BREAKER_RISK_COOLDOWN_MS=3600000
+```
+
 ## Login Session
 
 ```bash

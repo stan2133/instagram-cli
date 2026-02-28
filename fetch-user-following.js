@@ -9,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { createInstagramRequestGuard } = require('./src/services/ig-request-guard');
 
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
 const BROWSER_INFO_FILE = path.join(SESSION_DIR, 'browser-info.json');
@@ -304,8 +305,8 @@ function buildApiHeaders() {
   };
 }
 
-async function fetchJsonInPage(page, apiUrl) {
-  const payload = await page.evaluate(async (url, headers) => {
+async function fetchJsonInPage(page, apiUrl, requestGuard) {
+  const runRequest = async () => page.evaluate(async (url, headers) => {
     try {
       const res = await fetch(url, {
         method: 'GET',
@@ -337,9 +338,13 @@ async function fetchJsonInPage(page, apiUrl) {
     }
   }, apiUrl, buildApiHeaders());
 
+  const payload = requestGuard
+    ? await requestGuard.run({ url: apiUrl, method: 'GET' }, runRequest)
+    : await runRequest();
+
   if (!payload.ok) {
     const reason = payload.textHead || `${payload.status} ${payload.statusText}`;
-    throw new Error(`请求失败(${apiUrl}): ${reason}`);
+    throw new Error(`请求失败(${apiUrl}) status=${payload.status}: ${reason}`);
   }
   if (!payload.json || typeof payload.json !== 'object') {
     throw new Error(`接口返回非 JSON: ${apiUrl}`);
@@ -391,7 +396,7 @@ function normalizeFollowingUser(user) {
   };
 }
 
-async function fetchUserFollowingList(page, userId, limit) {
+async function fetchUserFollowingList(page, userId, limit, requestGuard) {
   const users = [];
   const seen = new Set();
   let maxId = '';
@@ -412,7 +417,7 @@ async function fetchUserFollowingList(page, userId, limit) {
     }
 
     const apiUrl = `/api/v1/friendships/${encodeURIComponent(userId)}/following/?${qs.toString()}`;
-    const data = await fetchJsonInPage(page, apiUrl);
+    const data = await fetchJsonInPage(page, apiUrl, requestGuard);
     const list = Array.isArray(data?.users) ? data.users : [];
 
     pages += 1;
@@ -476,6 +481,10 @@ async function fetchUserFollowing(target, options = {}) {
 
   console.log(`🎯 目标账号: @${normalized.username}`);
   console.log(`📌 关注列表上限: ${limit}\n`);
+  const requestGuard = createInstagramRequestGuard({
+    scriptName: 'fetch-user-following',
+  });
+  console.log(`🛡️ 请求防护: ${requestGuard.describe()}\n`);
 
   let browser;
   try {
@@ -493,7 +502,8 @@ async function fetchUserFollowing(target, options = {}) {
 
     const profileJson = await fetchJsonInPage(
       page,
-      `/api/v1/users/web_profile_info/?username=${encodeURIComponent(normalized.username)}`
+      `/api/v1/users/web_profile_info/?username=${encodeURIComponent(normalized.username)}`,
+      requestGuard
     );
     const user = profileJson?.data?.user;
     if (!user) {
@@ -507,7 +517,7 @@ async function fetchUserFollowing(target, options = {}) {
       throw new Error(`缺少用户 ID: @${profile.username || normalized.username}`);
     }
 
-    const followingData = await fetchUserFollowingList(page, userId, limit);
+    const followingData = await fetchUserFollowingList(page, userId, limit, requestGuard);
 
     const output = {
       profile,

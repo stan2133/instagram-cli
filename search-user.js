@@ -9,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { createInstagramRequestGuard } = require('./src/services/ig-request-guard');
 
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
 const BROWSER_INFO_FILE = path.join(SESSION_DIR, 'browser-info.json');
@@ -514,8 +515,8 @@ async function scrollSearchResults(page) {
   });
 }
 
-async function fetchSearchUsersByApi(page, query, limit) {
-  return page.evaluate(async (keyword, maxCount) => {
+async function fetchSearchUsersByApi(page, query, limit, requestGuard) {
+  const runRequest = async () => page.evaluate(async (keyword, maxCount) => {
     try {
       const url = `/api/v1/web/search/topsearch/?context=blended&query=${encodeURIComponent(keyword)}&count=${maxCount}`;
       const res = await fetch(url, {
@@ -525,14 +526,27 @@ async function fetchSearchUsersByApi(page, query, limit) {
           'x-requested-with': 'XMLHttpRequest',
         },
       });
-      if (!res.ok) {
-        return [];
+
+      const text = await res.text();
+      let data = null;
+      try {
+        data = JSON.parse(text);
+      } catch (_error) {
+        data = null;
       }
 
-      const data = await res.json();
+      if (!res.ok) {
+        return {
+          ok: false,
+          status: res.status,
+          statusText: res.statusText,
+          textHead: text.slice(0, 280),
+          users: [],
+        };
+      }
+
       const list = Array.isArray(data?.users) ? data.users : [];
       const users = [];
-
       for (const item of list) {
         const u = item?.user || {};
         const username = String(u.username || '').trim();
@@ -562,14 +576,44 @@ async function fetchSearchUsersByApi(page, query, limit) {
         }
       }
 
-      return users;
-    } catch (_error) {
-      return [];
+      return {
+        ok: true,
+        status: res.status,
+        statusText: res.statusText,
+        textHead: '',
+        users,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        status: 0,
+        statusText: '',
+        textHead: String(error?.message || error || ''),
+        users: [],
+      };
     }
   }, query, limit);
+
+  try {
+    const payload = requestGuard
+      ? await requestGuard.run({
+        url: `/api/v1/web/search/topsearch/?query=${encodeURIComponent(query)}`,
+        method: 'GET',
+      }, runRequest)
+      : await runRequest();
+
+    if (!payload.ok) {
+      throw new Error(`搜索接口请求失败 status=${payload.status}: ${payload.textHead || payload.statusText}`);
+    }
+
+    return Array.isArray(payload.users) ? payload.users : [];
+  } catch (error) {
+    console.log(`⚠️  搜索 API 回退到页面解析: ${error.message || error}`);
+    return [];
+  }
 }
 
-async function extractSearchResults(page, query, limit) {
+async function extractSearchResults(page, query, limit, requestGuard) {
   const maxRounds = Math.max(4, Math.ceil(limit / 2) + 4);
   const users = [];
   const seen = new Set();
@@ -599,7 +643,7 @@ async function extractSearchResults(page, query, limit) {
   }
 
   if (users.length < limit) {
-    const apiUsers = await fetchSearchUsersByApi(page, query, limit);
+    const apiUsers = await fetchSearchUsersByApi(page, query, limit, requestGuard);
     mergeUniqueUsers(users, apiUsers, limit, seen);
   }
 
@@ -651,6 +695,10 @@ async function searchUsers(query, options = {}) {
 
   console.log(`🔍 正在搜索用户: ${query}`);
   console.log(`📌 结果上限: ${limit}\n`);
+  const requestGuard = createInstagramRequestGuard({
+    scriptName: 'search-user',
+  });
+  console.log(`🛡️ 请求防护: ${requestGuard.describe()}\n`);
 
   let browser;
   try {
@@ -695,7 +743,7 @@ async function searchUsers(query, options = {}) {
     await page.keyboard.press('Enter').catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    const results = await extractSearchResults(page, query, limit);
+    const results = await extractSearchResults(page, query, limit, requestGuard);
     console.log(`✅ 找到 ${results.length} 个用户:\n`);
 
     if (results.length < limit) {

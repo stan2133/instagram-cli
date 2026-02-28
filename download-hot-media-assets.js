@@ -13,6 +13,10 @@ const crypto = require('crypto');
 const axios = require('axios');
 const { spawn } = require('child_process');
 const { pipeline } = require('stream/promises');
+const {
+  createInstagramRequestGuard,
+  isCircuitBreakerError,
+} = require('./src/services/ig-request-guard');
 
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
 const BROWSER_INFO_FILE = path.join(SESSION_DIR, 'browser-info.json');
@@ -606,8 +610,8 @@ function buildApiHeaders() {
   };
 }
 
-async function fetchJsonInPage(page, apiUrl) {
-  const payload = await page.evaluate(async (url, headers) => {
+async function fetchJsonInPage(page, apiUrl, requestGuard) {
+  const runRequest = async () => page.evaluate(async (url, headers) => {
     try {
       const res = await fetch(url, {
         method: 'GET',
@@ -639,8 +643,12 @@ async function fetchJsonInPage(page, apiUrl) {
     }
   }, apiUrl, buildApiHeaders());
 
+  const payload = requestGuard
+    ? await requestGuard.run({ url: apiUrl, method: 'GET' }, runRequest)
+    : await runRequest();
+
   if (!payload.ok) {
-    throw new Error(`请求失败(${apiUrl}): ${payload.textHead || `${payload.status} ${payload.statusText}`}`);
+    throw new Error(`请求失败(${apiUrl}) status=${payload.status}: ${payload.textHead || `${payload.status} ${payload.statusText}`}`);
   }
   if (!payload.json || typeof payload.json !== 'object') {
     throw new Error(`接口返回非 JSON: ${apiUrl}`);
@@ -1019,7 +1027,7 @@ async function runPool(items, concurrency, worker) {
   await Promise.all(workers);
 }
 
-async function fetchMediaItemByPostUrl(page, postUrl) {
+async function fetchMediaItemByPostUrl(page, postUrl, requestGuard) {
   await openPostAndEnsureLoggedIn(page, postUrl);
 
   const resolved = await resolveMediaPkFromCurrentPage(page);
@@ -1027,7 +1035,11 @@ async function fetchMediaItemByPostUrl(page, postUrl) {
     throw new Error('无法从页面解析 mediaPk');
   }
 
-  const info = await fetchJsonInPage(page, `/api/v1/media/${encodeURIComponent(resolved.mediaPk)}/info/`);
+  const info = await fetchJsonInPage(
+    page,
+    `/api/v1/media/${encodeURIComponent(resolved.mediaPk)}/info/`,
+    requestGuard
+  );
   const item = info?.items?.[0];
   if (!item) {
     throw new Error('未获取到 media info');
@@ -1046,6 +1058,9 @@ function createOutputPaths(baseOutputDir) {
 async function downloadHotMediaAssets(options = {}) {
   const puppeteer = options.puppeteer || require('puppeteer');
   const proxyConfig = parseProxyConfig(options.proxy);
+  const requestGuard = createInstagramRequestGuard({
+    scriptName: 'download-hot-media-assets',
+  });
 
   const inputPath = path.isAbsolute(options.input)
     ? options.input
@@ -1083,6 +1098,7 @@ async function downloadHotMediaAssets(options = {}) {
   console.log(`📌 帖子数量: ${postUrls.length}`);
   console.log(`📁 输出目录: ${baseOutputDir}`);
   console.log(`⚙️  并发: ${options.concurrency}, 重试: ${options.retry}, 超时: ${options.timeout}ms\n`);
+  console.log(`🛡️ 请求防护: ${requestGuard.describe()}\n`);
   if (proxyConfig.masked) {
     console.log(`🌐 下载代理: ${proxyConfig.masked}\n`);
   }
@@ -1112,7 +1128,7 @@ async function downloadHotMediaAssets(options = {}) {
 
       try {
         console.log(`${progress} 解析帖子: ${postUrl}`);
-        const mediaItem = await fetchMediaItemByPostUrl(page, postUrl);
+        const mediaItem = await fetchMediaItemByPostUrl(page, postUrl, requestGuard);
         const mediaEntries = mapMediaEntries(mediaItem, postUrl, {
           includeCover: options.includeCover,
         });
@@ -1178,6 +1194,9 @@ async function downloadHotMediaAssets(options = {}) {
 
         posts.push(postRecord);
       } catch (error) {
+        if (isCircuitBreakerError(error)) {
+          throw error;
+        }
         posts.push({
           rank: idx + 1,
           postUrl,

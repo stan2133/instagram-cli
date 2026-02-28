@@ -70,3 +70,26 @@ Use one of:
 - `http://127.0.0.1:7897`
 - `https://user:pass@host:port`
 - `socks5://127.0.0.1:1080`
+
+## 6) Circuit Breaker Triggered
+
+Symptoms:
+
+- Error contains `请求被熔断保护拦截`
+- Error contains `触发熔断保护`
+
+Fix:
+
+1. Stop chaining more IG scripts for the same account.
+2. Wait for cooldown to expire (message includes remaining seconds).
+3. Resume with safer profile (higher delay / lower threshold).
+
+Example safe profile:
+
+```bash
+export IG_RATE_LIMIT_MIN_DELAY_MS=1200
+export IG_RATE_LIMIT_JITTER_MS=800
+export IG_CIRCUIT_BREAKER_FAILURE_THRESHOLD=2
+export IG_CIRCUIT_BREAKER_COOLDOWN_MS=600000
+export IG_CIRCUIT_BREAKER_RISK_COOLDOWN_MS=3600000
+```

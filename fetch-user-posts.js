@@ -9,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { createInstagramRequestGuard } = require('./src/services/ig-request-guard');
 
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
 const BROWSER_INFO_FILE = path.join(SESSION_DIR, 'browser-info.json');
@@ -304,8 +305,8 @@ function buildApiHeaders() {
   };
 }
 
-async function fetchJsonInPage(page, apiUrl) {
-  const payload = await page.evaluate(async (url, headers) => {
+async function fetchJsonInPage(page, apiUrl, requestGuard) {
+  const runRequest = async () => page.evaluate(async (url, headers) => {
     try {
       const res = await fetch(url, {
         method: 'GET',
@@ -337,9 +338,13 @@ async function fetchJsonInPage(page, apiUrl) {
     }
   }, apiUrl, buildApiHeaders());
 
+  const payload = requestGuard
+    ? await requestGuard.run({ url: apiUrl, method: 'GET' }, runRequest)
+    : await runRequest();
+
   if (!payload.ok) {
     const reason = payload.textHead || `${payload.status} ${payload.statusText}`;
-    throw new Error(`请求失败(${apiUrl}): ${reason}`);
+    throw new Error(`请求失败(${apiUrl}) status=${payload.status}: ${reason}`);
   }
   if (!payload.json || typeof payload.json !== 'object') {
     throw new Error(`接口返回非 JSON: ${apiUrl}`);
@@ -464,10 +469,11 @@ function normalizePost(item, username) {
   };
 }
 
-async function fetchProfileAndPosts(page, username, limit) {
+async function fetchProfileAndPosts(page, username, limit, requestGuard) {
   const profileJson = await fetchJsonInPage(
     page,
-    `/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`
+    `/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
+    requestGuard
   );
 
   const user = profileJson?.data?.user;
@@ -492,7 +498,7 @@ async function fetchProfileAndPosts(page, username, limit) {
     const query = maxId
       ? `/api/v1/feed/user/${encodeURIComponent(userId)}/?count=${count}&max_id=${encodeURIComponent(maxId)}`
       : `/api/v1/feed/user/${encodeURIComponent(userId)}/?count=${count}`;
-    const feedJson = await fetchJsonInPage(page, query);
+    const feedJson = await fetchJsonInPage(page, query, requestGuard);
     const items = Array.isArray(feedJson?.items) ? feedJson.items : [];
 
     if (!items.length) {
@@ -546,6 +552,10 @@ async function fetchUserPosts(target, options = {}) {
 
   console.log(`🎯 目标账号: @${normalized.username}`);
   console.log(`📌 帖子上限: ${limit}\n`);
+  const requestGuard = createInstagramRequestGuard({
+    scriptName: 'fetch-user-posts',
+  });
+  console.log(`🛡️ 请求防护: ${requestGuard.describe()}\n`);
 
   let browser;
   try {
@@ -561,7 +571,7 @@ async function fetchUserPosts(target, options = {}) {
     const page = await pickInstagramPage(browser);
     await ensureLoggedInAtProfile(page, normalized.profileUrl);
 
-    const result = await fetchProfileAndPosts(page, normalized.username, limit);
+    const result = await fetchProfileAndPosts(page, normalized.username, limit, requestGuard);
     const output = {
       profile: result.profile,
       posts: result.posts,

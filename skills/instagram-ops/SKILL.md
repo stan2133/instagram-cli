@@ -37,6 +37,34 @@ Apply these rules for all runs:
 - Write media downloads to `./downloads` by default.
 - Return absolute output file paths and key counts (`actualCount`, `failedCount`, etc.).
 - If download touches Instagram CDN and fails, retry with proxy before changing logic.
+- Keep IG request guard enabled (rate limiter + circuit breaker) unless user explicitly asks to disable.
+- If circuit breaker is triggered, stop further script chaining and report cooldown seconds.
+
+## IG Request Guard (Built-in)
+
+These scripts include built-in request guard:
+
+- `search-user.js`
+- `fetch-user-posts.js`
+- `fetch-user-following.js`
+- `fetch-post-hot-comments.js`
+- `download-hot-media-assets.js` (post-resolve API stage)
+
+Default behavior:
+
+- Rate limit: `900ms` minimum + random jitter `0~600ms`
+- Circuit breaker: open after `3` consecutive failures
+- Cooldown: `300s` for normal failures, `1800s` for risk signals (`429/challenge/checkpoint/feedback`)
+
+Environment overrides (optional):
+
+- `IG_RATE_LIMIT_ENABLED`
+- `IG_RATE_LIMIT_MIN_DELAY_MS`
+- `IG_RATE_LIMIT_JITTER_MS`
+- `IG_CIRCUIT_BREAKER_ENABLED`
+- `IG_CIRCUIT_BREAKER_FAILURE_THRESHOLD`
+- `IG_CIRCUIT_BREAKER_COOLDOWN_MS`
+- `IG_CIRCUIT_BREAKER_RISK_COOLDOWN_MS`
 
 ## Standard Workflows
 
