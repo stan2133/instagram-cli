@@ -23,11 +23,17 @@ Claude Desktop / Cursor 调用 MCP 工具
 ### 步骤 1: 使用 login_web.js 登录网站
 
 ```bash
-# 登录 Instagram
+# 登录 Instagram（默认使用 Puppeteer 默认浏览器路径）
 node login_web.js https://www.instagram.com
 
 # 登录 Twitter
 node login_web.js https://twitter.com
+
+# 推荐：显式指定系统 Application Chrome
+node login_web.js https://www.instagram.com --chrome-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+# 或使用环境变量
+CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" node login_web.js https://example.com
 
 # 登录任意网站
 node login_web.js https://example.com
@@ -39,6 +45,10 @@ node login_web.js https://example.com
 3. 登录成功后回到终端按 Enter
 4. 脚本自动检测登录状态并保存 cookies
 5. 生成 MCP 配置文件
+
+说明：
+- `login_web.js` 优先级：`--chrome-path` > `CHROME_PATH` > Puppeteer 默认。
+- 不传路径时保持原有默认行为。
 
 **输出示例**:
 ```
@@ -355,6 +365,23 @@ node login_web.js https://www.instagram.com
 export DEBUG_PORT=9223
 node login_web.js https://twitter.com
 ```
+
+### 指定 Application Chrome 路径
+
+```bash
+# 单次命令指定
+node login_web.js https://www.instagram.com --chrome-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+# 环境变量指定
+export CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+node login_web.js https://www.instagram.com
+```
+
+## 风控说明（与 Chrome 路径独立）
+
+- 使用系统 Chrome 只能调整浏览器来源，不等于解决 IG 风控。
+- 风控主要由行为触发：高频请求、固定节奏、连续长时抓取/下载。
+- 建议任务分批、增加间隔，遇到挑战页或异常限制时立即暂停。
 
 ## 更多信息
 

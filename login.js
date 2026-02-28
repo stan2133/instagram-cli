@@ -19,6 +19,25 @@ if (!fs.existsSync(SESSION_DIR)) {
   fs.mkdirSync(SESSION_DIR, { recursive: true });
 }
 
+function resolveChromeExecutablePath(rawPath) {
+  if (!rawPath || !String(rawPath).trim()) {
+    return '';
+  }
+
+  let inputPath = String(rawPath).trim();
+  if (inputPath.startsWith('~')) {
+    const homeDir = process.env.HOME || '';
+    inputPath = path.join(homeDir, inputPath.slice(1));
+  }
+
+  const resolvedPath = path.resolve(inputPath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`Chrome 路径不存在: ${resolvedPath}`);
+  }
+
+  return resolvedPath;
+}
+
 /**
  * 保存 cookies 到文件
  */
@@ -33,10 +52,16 @@ function saveCookies(cookies) {
 async function login() {
   let browser;
   try {
-    console.log('\n🌐 启动 Chrome 浏览器...\n');
+    const chromePath = resolveChromeExecutablePath(process.env.CHROME_PATH || '');
 
-    // 启动浏览器
-    browser = await puppeteer.launch({
+    console.log('\n🌐 启动 Chrome 浏览器...\n');
+    if (chromePath) {
+      console.log(`🧭 Chrome 路径: ${chromePath}\n`);
+    } else {
+      console.log('🧭 Chrome 路径: Puppeteer 默认\n');
+    }
+
+    const launchOptions = {
       headless: false, // 显示浏览器窗口
       defaultViewport: null,
       args: [
@@ -45,7 +70,13 @@ async function login() {
         '--disable-dev-shm-usage',
         '--remote-debugging-port=9222', // 启用远程调试端口
       ]
-    });
+    };
+    if (chromePath) {
+      launchOptions.executablePath = chromePath;
+    }
+
+    // 启动浏览器
+    browser = await puppeteer.launch(launchOptions);
 
     const page = await browser.newPage();
 

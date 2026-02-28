@@ -142,13 +142,49 @@ node dist/index.js photo:upload ./your-photo.jpg -c "Hello from CLI"
 1. 启动登录会话
 
 ```bash
+# 默认：使用 Puppeteer 默认浏览器路径
 node login_web.js https://www.instagram.com
+
+# 显式指定系统 Application Chrome（推荐）
+node login_web.js https://www.instagram.com --chrome-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+# 或使用环境变量（login.js / login_web.js 都支持）
+CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" node login_web.js https://www.instagram.com
+
 # 或指定调试端口（并行多站点时推荐）
 node login_web.js https://www.instagram.com --debug-port 9222
 ```
 
 2. 保持浏览器与脚本运行
 3. 使用仓库中的 `mcp_config.json` / `MCP_SETUP.md` 完成 MCP 配置
+
+## IG 风控与 Chrome 路径（两个独立问题）
+
+### 1) 下载行为被识别为机器人（风控问题）
+
+这是行为层问题，不是浏览器路径问题。建议：
+
+- 降低连续抓取/下载频率，避免长时间无间隔高并发请求。
+- 分批执行任务，每批之间增加冷却时间，不要“整夜跑满速”。
+- 保留人工操作痕迹（手动浏览、非固定节奏），避免纯脚本重复模式。
+- 遇到挑战页、频率限制、异常重定向时立即暂停任务，避免继续触发风控。
+- 使用测试账号验证流程，避免直接在主账号做高频自动化。
+
+### 2) 使用 Application Chrome（浏览器路径问题）
+
+这是浏览器启动来源配置，与你的下载策略独立。当前支持：
+
+- `login_web.js`: `--chrome-path <path>` 或 `CHROME_PATH`
+- `login.js`: `CHROME_PATH`
+- 默认不传时：仍使用 Puppeteer 默认浏览器路径
+- 优先级（`login_web.js`）：`--chrome-path` > `CHROME_PATH` > Puppeteer 默认
+
+macOS 示例：
+
+```bash
+CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" node login.js
+node login_web.js https://www.instagram.com --chrome-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+```
 
 ## Search User
 

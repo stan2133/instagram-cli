@@ -13,6 +13,7 @@ const readline = require('readline');
 // Session 存储路径
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
 const DEFAULT_DEBUG_PORT = Number(process.env.DEBUG_PORT || 9222);
+const DEFAULT_CHROME_PATH = process.env.CHROME_PATH || '';
 
 // 网站配置
 const SITE_CONFIGS = {
@@ -81,13 +82,34 @@ function parsePort(value) {
   return n;
 }
 
+function resolveChromeExecutablePath(rawPath) {
+  if (!rawPath || !String(rawPath).trim()) {
+    return '';
+  }
+
+  let inputPath = String(rawPath).trim();
+  if (inputPath.startsWith('~')) {
+    const homeDir = process.env.HOME || '';
+    inputPath = path.join(homeDir, inputPath.slice(1));
+  }
+
+  const resolvedPath = path.resolve(inputPath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`Chrome 路径不存在: ${resolvedPath}`);
+  }
+
+  return resolvedPath;
+}
+
 function printUsage() {
-  console.log('使用方法: node login_web.js <URL> [--debug-port <port>]');
+  console.log('使用方法: node login_web.js <URL> [--debug-port <port>] [--chrome-path <path>]');
   console.log('');
   console.log('示例:');
   console.log('  node login_web.js https://www.instagram.com');
   console.log('  node login_web.js https://www.taobao.com --debug-port 9222');
+  console.log('  node login_web.js https://www.instagram.com --chrome-path \"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\"');
   console.log('  DEBUG_PORT=9333 node login_web.js https://www.douyin.com');
+  console.log('  CHROME_PATH=\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" node login_web.js https://www.instagram.com');
   console.log('');
   console.log('注意: 登录后浏览器将保持打开状态，以便其他脚本使用');
   console.log('      按 Ctrl+C 关闭浏览器和退出程序\n');
@@ -97,6 +119,7 @@ function parseCliOptions(argv) {
   const options = {
     targetUrl: '',
     debugPort: DEFAULT_DEBUG_PORT,
+    chromePath: DEFAULT_CHROME_PATH,
     help: false,
     error: '',
   };
@@ -129,6 +152,25 @@ function parseCliOptions(argv) {
         return options;
       }
       options.debugPort = parsed;
+      continue;
+    }
+    if (arg === '--chrome-path') {
+      const value = argv[i + 1];
+      if (!value) {
+        options.error = '参数 --chrome-path 缺少路径值';
+        return options;
+      }
+      options.chromePath = value;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith('--chrome-path=')) {
+      const value = arg.slice('--chrome-path='.length).trim();
+      if (!value) {
+        options.error = '参数 --chrome-path 缺少路径值';
+        return options;
+      }
+      options.chromePath = value;
       continue;
     }
     if (arg.startsWith('-')) {
@@ -649,6 +691,7 @@ async function login(targetUrl, options = {}) {
     const domain = extractDomain(targetUrl);
     const config = getSiteConfig(domain);
     const debugPort = parsePort(options.debugPort || DEFAULT_DEBUG_PORT);
+    const chromePath = resolveChromeExecutablePath(options.chromePath || DEFAULT_CHROME_PATH);
     if (!debugPort) {
       throw new Error(`无效调试端口: ${options.debugPort}`);
     }
@@ -661,10 +704,14 @@ async function login(targetUrl, options = {}) {
     } else {
       console.log(`🔑 认证方式: 通用检测`);
     }
+    if (chromePath) {
+      console.log(`🧭 Chrome 路径: ${chromePath}`);
+    } else {
+      console.log('🧭 Chrome 路径: Puppeteer 默认');
+    }
     console.log('');
 
-    // 启动浏览器
-    browser = await puppeteer.launch({
+    const launchOptions = {
       headless: false, // 显示浏览器窗口
       defaultViewport: null,
       args: [
@@ -673,7 +720,13 @@ async function login(targetUrl, options = {}) {
         '--disable-dev-shm-usage',
         `--remote-debugging-port=${debugPort}`, // 启用远程调试端口
       ]
-    });
+    };
+    if (chromePath) {
+      launchOptions.executablePath = chromePath;
+    }
+
+    // 启动浏览器
+    browser = await puppeteer.launch(launchOptions);
 
     const pages = await browser.pages();
     const page = pages[0];
@@ -939,7 +992,10 @@ async function main() {
     process.exit(1);
   }
 
-  await login(targetUrl, { debugPort: options.debugPort });
+  await login(targetUrl, {
+    debugPort: options.debugPort,
+    chromePath: options.chromePath,
+  });
 }
 
 // 运行

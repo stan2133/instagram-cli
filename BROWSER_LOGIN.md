@@ -95,6 +95,22 @@ node bin/insta.js login --account work
 node bin/insta.js login --timeout 180
 ```
 
+## 🧭 指定 Application Chrome（与风控问题分开）
+
+针对脚本 `login.js` / `login_web.js`，可通过 `CHROME_PATH` 或 `--chrome-path` 指定系统 Chrome：
+
+```bash
+# login.js：使用环境变量指定 Chrome
+CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" node login.js
+
+# login_web.js：命令行参数优先
+node login_web.js https://www.instagram.com --chrome-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+```
+
+说明：
+- 默认不指定时，仍使用 Puppeteer 默认浏览器路径。
+- 这只影响“用哪个浏览器启动”，不直接改变下载行为风控结果。
+
 ## 🔍 登录后验证
 
 登录成功后，可以使用以下命令验证：

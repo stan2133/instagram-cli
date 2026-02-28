@@ -19,8 +19,14 @@ npm install -g puppeteer-mcp-server
 ### 第二步：登录网站
 
 ```bash
-# 以 Instagram 为例
+# 以 Instagram 为例（默认使用 Puppeteer 默认浏览器路径）
 node login_web.js https://www.instagram.com
+
+# 推荐：指定系统 Application Chrome
+node login_web.js https://www.instagram.com --chrome-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+# 或使用环境变量
+CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" node login_web.js https://www.instagram.com
 ```
 
 **操作**:
@@ -112,6 +118,12 @@ node login_web.js https://www.instagram.com
 1. 确认 `login_web.js` 正在运行
 2. 检查端口: `lsof -i :9222`
 3. 确认浏览器窗口未关闭
+
+## 风控说明（与 Chrome 路径独立）
+
+- IG 将“高频、固定节奏、长时连续下载”视为高风险行为。
+- 指定 `--chrome-path` 只能解决“启动哪个浏览器”的问题，不能替代下载节奏治理。
+- 建议分批执行下载任务，批次之间加间隔并保留人工操作节奏。
 
 ---
 

@@ -16,8 +16,14 @@ npm install -g puppeteer-mcp-server
 ### 2. 启动登录会话
 
 ```bash
-# 登录 Instagram
+# 登录 Instagram（默认使用 Puppeteer 默认浏览器路径）
 node login_web.js https://www.instagram.com
+
+# 推荐：显式指定系统 Application Chrome
+node login_web.js https://www.instagram.com --chrome-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+# 或使用环境变量
+CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" node login_web.js https://www.instagram.com
 ```
 
 **流程**：
@@ -25,6 +31,10 @@ node login_web.js https://www.instagram.com
 2. 手动输入用户名和密码登录
 3. 看到主页后按 **Enter**
 4. 浏览器保持运行在端口 9222
+
+说明：
+- `login_web.js` 优先级：`--chrome-path` > `CHROME_PATH` > Puppeteer 默认。
+- 不传路径时保持现有默认行为。
 
 ### 3. 使用 MCP 工具
 
@@ -205,6 +215,8 @@ AI: ✅ 截图已保存
 1. **启动登录**：
    ```bash
    node login_web.js https://www.instagram.com
+   # 或指定 Chrome 路径
+   # node login_web.js https://www.instagram.com --chrome-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
    # [手动登录并按 Enter]
    ```
 
@@ -266,6 +278,12 @@ AI: 使用 puppeteer_evaluate 执行：
    ```
 
 3. **确认浏览器窗口**：Chrome 窗口应保持打开
+
+## 风控说明（与 Chrome 路径独立）
+
+- 指定系统 Chrome 是“浏览器来源配置”，不能替代下载节奏治理。
+- IG 风控主要与行为模式相关：高频、固定节奏、长时连续抓取/下载更易触发。
+- 建议下载任务分批执行，并在异常挑战页出现时立即暂停。
 
 ### 操作无响应
 
