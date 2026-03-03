@@ -9,7 +9,10 @@
     },
     "igDaemon": {
       "command": "node",
-      "args": ["ig-daemon-mcp-server.js"]
+      "args": ["/Users/lyg/software/instagram-cli/ig-daemon-mcp-server.js"],
+      "env": {
+        "IG_DAEMON_URL": "http://127.0.0.1:4060"
+      }
     }
   }
 }
