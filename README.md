@@ -158,6 +158,92 @@ node login_web.js https://www.instagram.com --debug-port 9222
 2. 保持浏览器与脚本运行
 3. 使用仓库中的 `mcp_config.json` / `MCP_SETUP.md` 完成 MCP 配置
 
+## IG Daemon (MVP)
+
+用于把登录管理和任务执行集中到一个本地后台进程：
+
+- 登录仍然是“人工在浏览器里完成”
+- daemon 负责维护登录进程和作业队列
+- 后续 MCP 可直接对接该 daemon
+
+### 1) 启动 daemon
+
+```bash
+npm run daemon:start
+```
+
+默认监听：`http://127.0.0.1:4060`
+
+### 2) 启动登录会话（人工登录）
+
+```bash
+curl -sS -X POST http://127.0.0.1:4060/v1/login/start \
+  -H 'content-type: application/json' \
+  -d '{
+    "targetUrl":"https://www.instagram.com",
+    "debugPort":9222,
+    "hideOnAuthenticated":true
+  }'
+```
+
+说明：
+- `hideOnAuthenticated` 默认就是 `true`，检测到登录成功后会自动最小化/隐藏浏览器窗口。
+- 如需保留前台可见，传 `hideOnAuthenticated:false`。
+
+完成浏览器登录后，发送确认回车：
+
+```bash
+curl -sS -X POST http://127.0.0.1:4060/v1/login/confirm
+```
+
+查看登录状态与日志：
+
+```bash
+curl -sS http://127.0.0.1:4060/v1/login/status | jq
+```
+
+### 3) 提交任务（Job）
+
+示例：抓取账号帖子
+
+```bash
+curl -sS -X POST http://127.0.0.1:4060/v1/jobs \
+  -H 'content-type: application/json' \
+  -d '{
+    "type":"fetch_user_posts",
+    "params":{
+      "target":"nike",
+      "limit":24,
+      "output":"./logs/nike-posts.json"
+    }
+  }'
+```
+
+查看任务：
+
+```bash
+curl -sS http://127.0.0.1:4060/v1/jobs | jq
+curl -sS http://127.0.0.1:4060/v1/jobs/<jobId> | jq
+```
+
+### 4) 启动 MCP 适配器（接入 AI）
+
+```bash
+npm run mcp:daemon
+```
+
+可用 MCP tools：
+
+- `ig_health`
+- `ig_login_start`
+- `ig_login_status`
+- `ig_login_confirm`
+- `ig_login_stop`
+- `ig_job_submit`
+- `ig_job_list`
+- `ig_job_status`
+- `ig_job_cancel`
+
 ## IG 风控与 Chrome 路径（两个独立问题）
 
 ### 1) 下载行为被识别为机器人（风控问题）
