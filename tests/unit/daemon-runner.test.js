@@ -3,6 +3,40 @@
 const { buildCommand } = require('../../daemon/runner');
 
 describe('daemon runner command builder', () => {
+  it('builds search_users command with hard cap 5', () => {
+    const spec = buildCommand('search_users', {
+      query: 'dua lipa',
+      limit: 20,
+      output: './logs/dua-lipa-search.json',
+      debugPort: 9333,
+      keepConnected: true,
+    });
+
+    expect(spec.command).toBe('node');
+    expect(spec.args).toEqual([
+      'search-user.js',
+      'dua lipa',
+      '--limit', '5',
+      '--output', './logs/dua-lipa-search.json',
+      '--debug-port', '9333',
+      '--keep-connected',
+    ]);
+  });
+
+  it('uses default search_users limit 5 when not provided', () => {
+    const spec = buildCommand('search_users', {
+      query: 'nike',
+    });
+
+    expect(spec.command).toBe('node');
+    expect(spec.args).toEqual([
+      'search-user.js',
+      'nike',
+      '--limit', '5',
+      '--debug-port', '9222',
+    ]);
+  });
+
   it('builds fetch_user_posts command', () => {
     const spec = buildCommand('fetch_user_posts', {
       target: 'nike',
@@ -39,6 +73,24 @@ describe('daemon runner command builder', () => {
     expect(spec.args).toContain('--input');
     expect(spec.args).toContain('./logs/nike-hot-media.json');
     expect(spec.args).toContain('--no-cover');
+  });
+
+  it('builds go_home command', () => {
+    const spec = buildCommand('go_home', {
+      targetUrl: 'https://www.instagram.com/',
+      output: './logs/go-home.json',
+      debugPort: 9333,
+      keepConnected: true,
+    });
+
+    expect(spec.command).toBe('node');
+    expect(spec.args).toEqual([
+      'go-home.js',
+      '--target-url', 'https://www.instagram.com/',
+      '--output', './logs/go-home.json',
+      '--debug-port', '9333',
+      '--keep-connected',
+    ]);
   });
 
   it('throws for missing required params', () => {

@@ -118,6 +118,7 @@ AI 决策规则：
 4. `fetch_post_hot_comments`
 5. `fetch_user_hot_media`
 6. `download_hot_media_assets`
+7. `go_home`
 
 参数映射到现有脚本，示例：
 
@@ -126,6 +127,7 @@ AI 决策规则：
 - `fetch_post_hot_comments`: `target`, `limit`, `minLikes`, `includeReplies`, `output`, `debugPort`, `keepConnected`
 - `search_users`: `query`, `limit`, `output`, `open`, `debugPort`, `keepConnected`
 - `download_hot_media_assets`: `input`, `outputDir`, `concurrency`, `retry`, `timeout`, `maxPosts`, `proxy`, `overwrite`, `includeCover`, `debugPort`, `keepConnected`
+- `go_home`: `targetUrl`, `output`, `debugPort`, `keepConnected`
 
 ## 6. Job Lifecycle
 

@@ -1,5 +1,18 @@
 # Workflows
 
+## 0. Search Users (Top 5, No Polling)
+
+1. Ensure logged-in session via `node login.js`.
+2. Run `search-user.js` directly with `--limit 5`.
+3. Return top 5 users and output JSON path.
+4. Do not use daemon-style polling loop for this search flow.
+
+Example:
+
+```bash
+node search-user.js "dua lipa" --limit 5 --output ./logs/search-dua-lipa.json
+```
+
 ## A. Get Following List
 
 1. Ensure logged-in session via `node login.js`.

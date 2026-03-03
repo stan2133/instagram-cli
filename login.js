@@ -134,9 +134,10 @@ async function login() {
     saveCookies(cookies);
 
     // 保存浏览器连接信息
+    const wsEndpoint = typeof browser.wsEndpoint === 'function' ? String(browser.wsEndpoint() || '') : '';
     const browserInfo = {
-      webSocketDebuggerUrl: `ws://127.0.0.1:${browser.wsEndpoint()?.split(':').pop()}`,
-    pid: browser.process()?.pid
+      webSocketDebuggerUrl: wsEndpoint || 'ws://127.0.0.1:9222/devtools/browser',
+      pid: browser.process()?.pid
     };
 
     // 确保 session 目录存在

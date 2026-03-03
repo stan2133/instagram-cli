@@ -219,6 +219,20 @@ curl -sS -X POST http://127.0.0.1:4060/v1/jobs \
   }'
 ```
 
+示例：让浏览器会话回到 Instagram 首页
+
+```bash
+curl -sS -X POST http://127.0.0.1:4060/v1/jobs \
+  -H 'content-type: application/json' \
+  -d '{
+    "type":"go_home",
+    "params":{
+      "targetUrl":"https://www.instagram.com/",
+      "output":"./logs/go-home.json"
+    }
+  }'
+```
+
 查看任务：
 
 ```bash

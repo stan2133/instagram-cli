@@ -225,15 +225,23 @@ async function connectBrowser(puppeteer, debugPort) {
     }
   }
 
-  try {
-    const browser = await puppeteer.connect({
-      browserURL: `http://127.0.0.1:${debugPort}`,
-      defaultViewport: null,
-    });
-    console.log(`✅ 已通过 debug-port(${debugPort}) 连接到浏览器实例\n`);
-    return browser;
-  } catch (error) {
-    errors.push(`debug-port(${debugPort}) 连接失败: ${error.message}`);
+  const browserUrlCandidates = [
+    `http://127.0.0.1:${debugPort}`,
+    `http://localhost:${debugPort}`,
+    `http://[::1]:${debugPort}`,
+  ];
+
+  for (const browserURL of browserUrlCandidates) {
+    try {
+      const browser = await puppeteer.connect({
+        browserURL,
+        defaultViewport: null,
+      });
+      console.log(`✅ 已通过 debug-port(${debugPort}) 连接到浏览器实例 (${browserURL})\n`);
+      return browser;
+    } catch (error) {
+      errors.push(`${browserURL} 连接失败: ${error.message}`);
+    }
   }
 
   throw new Error(errors.join(' | '));

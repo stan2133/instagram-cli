@@ -872,8 +872,10 @@ async function login(targetUrl, options = {}) {
     saveCookies(cookies, domain);
 
     // 保存浏览器连接信息
+    const wsEndpoint = typeof browser.wsEndpoint === 'function' ? String(browser.wsEndpoint() || '') : '';
     const browserInfo = {
-      webSocketDebuggerUrl: `ws://127.0.0.1:${browser.wsEndpoint()?.split(':').pop()}`,
+      // Preserve Puppeteer's endpoint as-is so IPv6 endpoints (e.g. ws://[::1]:9222/...) keep working.
+      webSocketDebuggerUrl: wsEndpoint || `ws://127.0.0.1:${debugPort}/devtools/browser`,
       pid: browser.process()?.pid
     };
 

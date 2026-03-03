@@ -33,8 +33,12 @@ function buildCommand(jobType, params = {}) {
       if (!query) {
         throw new Error('search_users 缺少 query');
       }
+      const rawLimit = Number(params.limit);
+      const limit = Number.isInteger(rawLimit) && rawLimit > 0
+        ? Math.min(rawLimit, 5)
+        : 5;
       const args = ['search-user.js', query];
-      pushOption(args, 'limit', params.limit);
+      args.push('--limit', String(limit));
       pushOption(args, 'output', params.output);
       pushOption(args, 'open', params.open);
       pushOption(args, 'debug-port', debugPort);
@@ -110,6 +114,14 @@ function buildCommand(jobType, params = {}) {
       if (params.includeCover === false) {
         args.push('--no-cover');
       }
+      pushFlag(args, 'keep-connected', keepConnected);
+      return { command: 'node', args };
+    }
+    case 'go_home': {
+      const args = ['go-home.js'];
+      pushOption(args, 'target-url', params.targetUrl);
+      pushOption(args, 'output', params.output);
+      pushOption(args, 'debug-port', debugPort);
       pushFlag(args, 'keep-connected', keepConnected);
       return { command: 'node', args };
     }

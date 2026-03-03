@@ -204,7 +204,21 @@ curl -sS -X POST http://127.0.0.1:4060/v1/jobs \
   }' | jq
 ```
 
-### 7.5 轮询任务状态
+### 7.5 go_home（回到 Instagram 首页）
+
+```bash
+curl -sS -X POST http://127.0.0.1:4060/v1/jobs \
+  -H 'content-type: application/json' \
+  -d '{
+    "type":"go_home",
+    "params":{
+      "targetUrl":"https://www.instagram.com/",
+      "output":"./logs/go-home.json"
+    }
+  }' | jq
+```
+
+### 7.6 轮询任务状态
 
 ```bash
 curl -sS http://127.0.0.1:4060/v1/jobs | jq

@@ -23,7 +23,7 @@ node login.js
 ## Search User
 
 ```bash
-node search-user.js "<keyword>" --limit 10 --output ./logs/search-<keyword>.json
+node search-user.js "<keyword>" --limit 5 --output ./logs/search-<keyword>.json
 ```
 
 ## Fetch User Posts

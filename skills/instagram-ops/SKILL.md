@@ -9,7 +9,7 @@ description: Execute Instagram automation tasks in this repository by reusing th
 
 Route requests to scripts by intent:
 
-- Search users or open a result: use `search-user.js`
+- Search users or open a result: use `search-user.js --limit 5` (max 5 users)
 - Fetch profile posts: use `fetch-user-posts.js`
 - Fetch following list: use `fetch-user-following.js`
 - Rank hot reels/posts: use `fetch-user-hot-media.js`
@@ -33,12 +33,14 @@ Before running any IG operation:
 Apply these rules for all runs:
 
 - Run session-based scripts serially unless user explicitly asks for parallel.
+- For user search, keep result count at `5` (do not exceed).
 - Write JSON outputs to `./logs` by default.
 - Write media downloads to `./downloads` by default.
 - Return absolute output file paths and key counts (`actualCount`, `failedCount`, etc.).
 - If download touches Instagram CDN and fails, retry with proxy before changing logic.
 - Keep IG request guard enabled (rate limiter + circuit breaker) unless user explicitly asks to disable.
 - If circuit breaker is triggered, stop further script chaining and report cooldown seconds.
+- For user search requests, do not use daemon job polling loops; run `search-user.js` directly and return the output file + top results.
 
 ## IG Request Guard (Built-in)
 

@@ -6,7 +6,7 @@ const { createIgDaemonMcpServer } = require('./src/mcp/ig-daemon-mcp');
 
 async function main() {
   const server = await createIgDaemonMcpServer();
-  server.start();
+  await server.start();
 }
 
 if (require.main === module) {

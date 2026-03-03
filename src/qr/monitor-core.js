@@ -258,11 +258,29 @@ class QRMonitorSession extends EventEmitter {
       return this.browser;
     }
 
+    const browserUrlCandidates = [
+      `http://127.0.0.1:${this.debugPort}`,
+      `http://localhost:${this.debugPort}`,
+      `http://[::1]:${this.debugPort}`,
+    ];
+    const errors = [];
+
     try {
-      this.browser = await puppeteer.connect({
-        browserURL: `http://127.0.0.1:${this.debugPort}`,
-        defaultViewport: null,
-      });
+      for (const browserURL of browserUrlCandidates) {
+        try {
+          this.browser = await puppeteer.connect({
+            browserURL,
+            defaultViewport: null,
+          });
+          break;
+        } catch (error) {
+          errors.push(`${browserURL}: ${String(error?.message || error)}`);
+        }
+      }
+
+      if (!this.browser) {
+        throw new Error(errors.join(' | '));
+      }
       this.browser.on('disconnected', () => {
         this.browser = null;
         this.updateState({
@@ -282,7 +300,7 @@ class QRMonitorSession extends EventEmitter {
         connected: false,
         status: 'waiting_browser',
         message: `Waiting for browser debug port ${this.debugPort}...`,
-        lastError: String(error.message || error),
+        lastError: String(error?.message || error),
       });
     }
 

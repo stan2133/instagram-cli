@@ -12,6 +12,61 @@ const path = require('path');
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
 const BROWSER_INFO_FILE = path.join(SESSION_DIR, 'browser-info.json');
 
+function parseDebugPortFromWs(webSocketUrl, fallback = 9222) {
+  if (!webSocketUrl) {
+    return fallback;
+  }
+  try {
+    const parsed = new URL(webSocketUrl);
+    const port = Number(parsed.port || fallback);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return fallback;
+    }
+    return port;
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+async function connectBrowser(puppeteer, browserInfo) {
+  const errors = [];
+
+  if (browserInfo?.webSocketDebuggerUrl) {
+    try {
+      const browser = await puppeteer.connect({
+        browserWSEndpoint: browserInfo.webSocketDebuggerUrl,
+        defaultViewport: null,
+      });
+      console.log('✅ 已通过 WebSocket 连接到浏览器实例\n');
+      return browser;
+    } catch (error) {
+      errors.push(`WebSocket 连接失败: ${error.message}`);
+    }
+  }
+
+  const debugPort = parseDebugPortFromWs(browserInfo?.webSocketDebuggerUrl, Number(process.env.DEBUG_PORT || 9222));
+  const browserUrlCandidates = [
+    `http://127.0.0.1:${debugPort}`,
+    `http://localhost:${debugPort}`,
+    `http://[::1]:${debugPort}`,
+  ];
+
+  for (const browserURL of browserUrlCandidates) {
+    try {
+      const browser = await puppeteer.connect({
+        browserURL,
+        defaultViewport: null,
+      });
+      console.log(`✅ 已通过 debug-port(${debugPort}) 连接到浏览器实例 (${browserURL})\n`);
+      return browser;
+    } catch (error) {
+      errors.push(`${browserURL} 连接失败: ${error.message}`);
+    }
+  }
+
+  throw new Error(errors.join(' | '));
+}
+
 /**
  * 连接到已运行的浏览器实例
  */
@@ -43,11 +98,7 @@ async function searchUsers(query) {
   if (browserInfo) {
     // 连接到现有浏览器
     try {
-      browser = await puppeteer.connect({
-        browserWSEndpoint: browserInfo.webSocketDebuggerUrl,
-        defaultViewport: null,
-      });
-      console.log('✅ 已连接到现有浏览器实例\n');
+      browser = await connectBrowser(puppeteer, browserInfo);
 
       // 获取所有页面
       const pages = await browser.pages();
