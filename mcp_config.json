@@ -10,6 +10,10 @@
     "qrMonitor": {
       "command": "node",
       "args": ["qr-monitor-mcp-server.js"]
+    },
+    "igDaemon": {
+      "command": "node",
+      "args": ["ig-daemon-mcp-server.js"]
     }
   }
 }

@@ -6,6 +6,10 @@
       "env": {
         "DEBUG_PORT": "9222"
       }
+    },
+    "igDaemon": {
+      "command": "node",
+      "args": ["ig-daemon-mcp-server.js"]
     }
   }
 }
