@@ -9,11 +9,28 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const { execFile } = require('child_process');
 
 // Session 存储路径
 const SESSION_DIR = path.join(__dirname, '.instagram-cli', 'sessions');
 const DEFAULT_DEBUG_PORT = Number(process.env.DEBUG_PORT || 9222);
 const DEFAULT_CHROME_PATH = process.env.CHROME_PATH || '';
+
+function parseBool(value, fallback = false) {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
+const DEFAULT_HIDE_ON_AUTH = parseBool(process.env.HIDE_ON_AUTH, false);
 
 // 网站配置
 const SITE_CONFIGS = {
@@ -102,14 +119,16 @@ function resolveChromeExecutablePath(rawPath) {
 }
 
 function printUsage() {
-  console.log('使用方法: node login_web.js <URL> [--debug-port <port>] [--chrome-path <path>]');
+  console.log('使用方法: node login_web.js <URL> [--debug-port <port>] [--chrome-path <path>] [--hide-on-auth]');
   console.log('');
   console.log('示例:');
   console.log('  node login_web.js https://www.instagram.com');
   console.log('  node login_web.js https://www.taobao.com --debug-port 9222');
   console.log('  node login_web.js https://www.instagram.com --chrome-path \"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\"');
+  console.log('  node login_web.js https://www.instagram.com --hide-on-auth');
   console.log('  DEBUG_PORT=9333 node login_web.js https://www.douyin.com');
   console.log('  CHROME_PATH=\"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\" node login_web.js https://www.instagram.com');
+  console.log('  HIDE_ON_AUTH=true node login_web.js https://www.instagram.com');
   console.log('');
   console.log('注意: 登录后浏览器将保持打开状态，以便其他脚本使用');
   console.log('      按 Ctrl+C 关闭浏览器和退出程序\n');
@@ -120,6 +139,7 @@ function parseCliOptions(argv) {
     targetUrl: '',
     debugPort: DEFAULT_DEBUG_PORT,
     chromePath: DEFAULT_CHROME_PATH,
+    hideOnAuth: DEFAULT_HIDE_ON_AUTH,
     help: false,
     error: '',
   };
@@ -171,6 +191,14 @@ function parseCliOptions(argv) {
         return options;
       }
       options.chromePath = value;
+      continue;
+    }
+    if (arg === '--hide-on-auth') {
+      options.hideOnAuth = true;
+      continue;
+    }
+    if (arg === '--no-hide-on-auth') {
+      options.hideOnAuth = false;
       continue;
     }
     if (arg.startsWith('-')) {
@@ -673,6 +701,47 @@ async function detectLoginStatus(page, targetUrl, config) {
   };
 }
 
+function runAppleScript(script) {
+  return new Promise((resolve) => {
+    execFile('osascript', ['-e', script], { timeout: 4000 }, (error) => {
+      resolve(!error);
+    });
+  });
+}
+
+async function hideBrowserWindow(browser) {
+  try {
+    const pages = await browser.pages();
+    const page = pages[0] || await browser.newPage();
+    const session = await page.target().createCDPSession();
+    const info = await session.send('Browser.getWindowForTarget');
+    const windowId = Number(info?.windowId || 0);
+    if (windowId > 0) {
+      await session.send('Browser.setWindowBounds', {
+        windowId,
+        bounds: { windowState: 'minimized' },
+      });
+      return { ok: true, method: 'cdp-minimize' };
+    }
+  } catch (_error) {
+    // fallback below
+  }
+
+  if (process.platform === 'darwin') {
+    const pid = Number(browser?.process?.()?.pid || 0);
+    if (pid > 0) {
+      const ok = await runAppleScript(
+        `tell application "System Events" to set visible of (first process whose unix id is ${pid}) to false`
+      );
+      if (ok) {
+        return { ok: true, method: 'osascript-hide' };
+      }
+    }
+  }
+
+  return { ok: false, method: 'none' };
+}
+
 /**
  * 登录网站
  */
@@ -709,6 +778,7 @@ async function login(targetUrl, options = {}) {
     } else {
       console.log('🧭 Chrome 路径: Puppeteer 默认');
     }
+    console.log(`🙈 登录后隐藏窗口: ${options.hideOnAuth ? '开启' : '关闭'}`);
     console.log('');
 
     const launchOptions = {
@@ -784,6 +854,15 @@ async function login(targetUrl, options = {}) {
     }
 
     console.log(`\n✅ 登录成功! (检测方式: ${loginStatus.method})\n`);
+
+    if (options.hideOnAuth) {
+      const hideResult = await hideBrowserWindow(browser);
+      if (hideResult.ok) {
+        console.log(`🙈 已隐藏浏览器窗口 (${hideResult.method})`);
+      } else {
+        console.log('⚠️  未能自动隐藏浏览器窗口，可手动最小化');
+      }
+    }
 
     // 获取所有 cookies
     console.log('🍪 提取 session cookies...\n');
@@ -868,6 +947,18 @@ async function keepProcessAlive(browser) {
  */
 function waitForEnter() {
   return new Promise((resolve) => {
+    if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function') {
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+      rl.once('line', () => {
+        rl.close();
+        resolve();
+      });
+      return;
+    }
+
     readline.emitKeypressEvents(process.stdin);
     process.stdin.setRawMode(true);
 
@@ -995,6 +1086,7 @@ async function main() {
   await login(targetUrl, {
     debugPort: options.debugPort,
     chromePath: options.chromePath,
+    hideOnAuth: options.hideOnAuth,
   });
 }
 

@@ -204,6 +204,18 @@ async function keepProcessAlive(browser) {
  */
 function waitForEnter() {
   return new Promise((resolve) => {
+    if (!process.stdin.isTTY || typeof process.stdin.setRawMode !== 'function') {
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+      rl.once('line', () => {
+        rl.close();
+        resolve();
+      });
+      return;
+    }
+
     readline.emitKeypressEvents(process.stdin);
     process.stdin.setRawMode(true);
 
