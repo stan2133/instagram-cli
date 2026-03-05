@@ -20,6 +20,9 @@
     "server": "node src/server.js",
     "dev:server": "node --watch src/server.js",
     "daemon:start": "node daemon/server.js",
+    "subagent:template": "bash scripts/subagent-template.sh",
+    "subagent:template:path": "bash scripts/subagent-template.sh --path",
+    "subagent:template:copy": "bash scripts/subagent-template.sh --copy",
     "security:scan": "bash scripts/secret-scan.sh --tracked",
     "security:scan:staged": "bash scripts/secret-scan.sh --staged",
     "security:install-hooks": "bash scripts/install-git-hooks.sh"

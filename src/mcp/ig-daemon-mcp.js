@@ -1,5 +1,7 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const {
@@ -10,6 +12,16 @@ const {
 } = require('@modelcontextprotocol/sdk/types.js');
 
 const DEFAULT_DAEMON_URL = String(process.env.IG_DAEMON_URL || 'http://127.0.0.1:4060');
+const DEFAULT_LOGIN_TARGET_URL = 'https://www.instagram.com';
+const DEFAULT_DEBUG_PORT = 9222;
+const DEFAULT_JOB_POLL_MS = 1200;
+const DEFAULT_JOB_TIMEOUT_MS = 120000;
+const SEARCH_USERS_LIMIT_CAP = 5;
+const LOGIN_REQUIRED_PATTERNS = [
+  '当前未认证登录',
+  'not authenticated',
+  'login required',
+];
 
 function toJsonText(value) {
   return JSON.stringify(value, null, 2);
@@ -17,6 +29,66 @@ function toJsonText(value) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function toPort(value, fallback = DEFAULT_DEBUG_PORT) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function toPositiveInt(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGER) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+  if (parsed < min) {
+    return min;
+  }
+  if (parsed > max) {
+    return max;
+  }
+  return parsed;
+}
+
+function toBool(value, fallback = false) {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTerminalJobStatus(status) {
+  return status === 'succeeded' || status === 'failed' || status === 'cancelled';
+}
+
+function isLoginRequiredError(error) {
+  const msg = String(error?.message || '').toLowerCase();
+  return LOGIN_REQUIRED_PATTERNS.some((pattern) => msg.includes(pattern.toLowerCase()));
+}
+
+function sanitizeFileToken(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'search';
 }
 
 function normalizeDaemonUrl(rawUrl) {
@@ -58,6 +130,24 @@ function listToolDefinitions() {
         type: 'object',
         properties: {
           daemonUrl: { type: 'string' },
+        },
+      },
+    },
+    {
+      name: 'ig_login_ensure',
+      description: 'Ensure login flow is ready: if not logged in, auto-start browser login for user.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          daemonUrl: { type: 'string' },
+          targetUrl: { type: 'string' },
+          debugPort: { type: 'number' },
+          chromePath: { type: 'string' },
+          hideOnAuthenticated: { type: 'boolean' },
+          confirmIfReady: { type: 'boolean' },
+          waitForAuthenticated: { type: 'boolean' },
+          timeoutMs: { type: 'number' },
+          pollMs: { type: 'number' },
         },
       },
     },
@@ -115,8 +205,39 @@ function listToolDefinitions() {
           daemonUrl: { type: 'string' },
           type: { type: 'string' },
           params: { type: 'object' },
+          wait: { type: 'boolean' },
+          timeoutMs: { type: 'number' },
+          pollMs: { type: 'number' },
+          openLoginOnUnauthenticated: { type: 'boolean' },
+          targetUrl: { type: 'string' },
+          debugPort: { type: 'number' },
+          chromePath: { type: 'string' },
+          hideOnAuthenticated: { type: 'boolean' },
         },
         required: ['type'],
+      },
+    },
+    {
+      name: 'ig_search_users',
+      description: 'Search Instagram users (hard cap 5). Automatically opens login browser flow if not authenticated.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          daemonUrl: { type: 'string' },
+          query: { type: 'string' },
+          limit: { type: 'number' },
+          output: { type: 'string' },
+          open: { type: 'string' },
+          wait: { type: 'boolean' },
+          timeoutMs: { type: 'number' },
+          pollMs: { type: 'number' },
+          openLoginOnUnauthenticated: { type: 'boolean' },
+          targetUrl: { type: 'string' },
+          debugPort: { type: 'number' },
+          chromePath: { type: 'string' },
+          hideOnAuthenticated: { type: 'boolean' },
+        },
+        required: ['query'],
       },
     },
     {
@@ -220,6 +341,235 @@ async function callDaemon(baseUrl, method, endpoint, body) {
   }
 }
 
+async function getLoginStatus(baseUrl, tail = 80) {
+  const n = toPositiveInt(tail, 80, 1, 500);
+  return callDaemon(baseUrl, 'GET', `/v1/login/status?tail=${n}`);
+}
+
+async function startLoginIfNeeded(baseUrl, input = {}, phase = '') {
+  const normalizedPhase = String(phase || '').trim();
+  if (!['idle', 'stopped', 'error', ''].includes(normalizedPhase)) {
+    return {
+      started: false,
+      reason: 'login-already-in-progress',
+    };
+  }
+
+  const body = {
+    targetUrl: String(input.targetUrl || DEFAULT_LOGIN_TARGET_URL),
+    debugPort: toPort(input.debugPort, DEFAULT_DEBUG_PORT),
+    chromePath: String(input.chromePath || ''),
+    // keep browser visible by default to let user login manually
+    hideOnAuthenticated: toBool(input.hideOnAuthenticated, false),
+  };
+
+  try {
+    const loginStart = await callDaemon(baseUrl, 'POST', '/v1/login/start', body);
+    return {
+      started: true,
+      reason: 'login-started',
+      loginStart,
+    };
+  } catch (error) {
+    if (!String(error?.message || '').includes('登录进程已在运行')) {
+      throw error;
+    }
+    return {
+      started: false,
+      reason: 'login-process-already-running',
+    };
+  }
+}
+
+async function ensureLoginFlow(baseUrl, input = {}) {
+  let statusResp = await getLoginStatus(baseUrl, 80);
+  let status = statusResp.status || {};
+
+  if (status.phase === 'authenticated') {
+    return {
+      ok: true,
+      authenticated: true,
+      action: 'already-authenticated',
+      status,
+      logs: statusResp.logs || [],
+      at: nowIso(),
+    };
+  }
+
+  if (toBool(input.confirmIfReady, false) && status.canConfirm === true) {
+    await callDaemon(baseUrl, 'POST', '/v1/login/confirm');
+    statusResp = await getLoginStatus(baseUrl, 80);
+    status = statusResp.status || {};
+    if (status.phase === 'authenticated') {
+      return {
+        ok: true,
+        authenticated: true,
+        action: 'confirmed-and-authenticated',
+        status,
+        logs: statusResp.logs || [],
+        at: nowIso(),
+      };
+    }
+  }
+
+  const startResult = await startLoginIfNeeded(baseUrl, input, status.phase);
+  if (startResult.started) {
+    statusResp = await getLoginStatus(baseUrl, 80);
+    status = statusResp.status || {};
+  }
+
+  const waitForAuthenticated = toBool(input.waitForAuthenticated, false);
+  if (waitForAuthenticated) {
+    const timeoutMs = toPositiveInt(input.timeoutMs, DEFAULT_JOB_TIMEOUT_MS, 1000, 600000);
+    const pollMs = toPositiveInt(input.pollMs, DEFAULT_JOB_POLL_MS, 200, 10000);
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      statusResp = await getLoginStatus(baseUrl, 40);
+      status = statusResp.status || {};
+      if (status.phase === 'authenticated') {
+        return {
+          ok: true,
+          authenticated: true,
+          action: startResult.started ? 'started-and-authenticated' : 'authenticated-after-wait',
+          status,
+          logs: statusResp.logs || [],
+          wait: {
+            enabled: true,
+            timeoutMs,
+            pollMs,
+          },
+          at: nowIso(),
+        };
+      }
+      await sleep(pollMs);
+    }
+  }
+
+  return {
+    ok: true,
+    authenticated: false,
+    requiresManualLogin: true,
+    action: startResult.started ? 'login-started-waiting-manual' : 'waiting-manual-login',
+    message: '未检测到已登录会话。已打开（或保持）浏览器登录流程，请在浏览器完成登录后调用 ig_login_confirm。',
+    status,
+    logs: statusResp.logs || [],
+    loginStart: startResult.loginStart || null,
+    at: nowIso(),
+  };
+}
+
+async function waitForJobTerminal(baseUrl, jobId, options = {}) {
+  const timeoutMs = toPositiveInt(options.timeoutMs, DEFAULT_JOB_TIMEOUT_MS, 1000, 600000);
+  const pollMs = toPositiveInt(options.pollMs, DEFAULT_JOB_POLL_MS, 200, 10000);
+  const deadline = Date.now() + timeoutMs;
+  let attempts = 0;
+
+  while (Date.now() < deadline) {
+    attempts += 1;
+    const statusResp = await callDaemon(baseUrl, 'GET', `/v1/jobs/${encodeURIComponent(jobId)}`);
+    const status = String(statusResp?.job?.status || '');
+    if (isTerminalJobStatus(status)) {
+      return {
+        statusResp,
+        wait: {
+          enabled: true,
+          timeoutMs,
+          pollMs,
+          attempts,
+          finishedAt: nowIso(),
+        },
+      };
+    }
+    await sleep(pollMs);
+  }
+
+  throw new McpError(-32013, `job wait timeout: ${jobId}`, {
+    jobId,
+    timeoutMs,
+    pollMs,
+  });
+}
+
+async function submitJobWithOptions(baseUrl, type, params, options = {}) {
+  const wait = toBool(options.wait, false);
+  const openLoginOnUnauthenticated = toBool(options.openLoginOnUnauthenticated, true);
+
+  let submitResp;
+  try {
+    submitResp = await callDaemon(baseUrl, 'POST', '/v1/jobs', {
+      type,
+      params: params || {},
+    });
+  } catch (error) {
+    if (!openLoginOnUnauthenticated || !isLoginRequiredError(error)) {
+      throw error;
+    }
+    const ensureResp = await ensureLoginFlow(baseUrl, {
+      targetUrl: options.targetUrl || DEFAULT_LOGIN_TARGET_URL,
+      debugPort: options.debugPort || params?.debugPort || DEFAULT_DEBUG_PORT,
+      chromePath: options.chromePath || '',
+      hideOnAuthenticated: toBool(options.hideOnAuthenticated, false),
+      confirmIfReady: false,
+      waitForAuthenticated: false,
+    });
+    return {
+      ok: false,
+      submitted: false,
+      requiresManualLogin: true,
+      message: '当前未认证，已自动发起浏览器登录流程。请完成人工登录并调用 ig_login_confirm 后重试作业提交。',
+      login: ensureResp,
+      at: nowIso(),
+    };
+  }
+
+  if (!wait) {
+    return {
+      ...submitResp,
+      wait: {
+        enabled: false,
+      },
+    };
+  }
+
+  const jobId = String(submitResp?.job?.id || '').trim();
+  if (!jobId) {
+    throw new McpError(-32014, 'job id missing in submit response');
+  }
+
+  const terminal = await waitForJobTerminal(baseUrl, jobId, {
+    timeoutMs: options.timeoutMs,
+    pollMs: options.pollMs,
+  });
+
+  return {
+    ...submitResp,
+    job: terminal.statusResp.job,
+    terminal: terminal.statusResp.job,
+    wait: terminal.wait,
+    at: nowIso(),
+  };
+}
+
+function readUsersFromOutput(filePathLike) {
+  const outputPath = String(filePathLike || '').trim();
+  if (!outputPath) {
+    return [];
+  }
+  const absolute = path.isAbsolute(outputPath)
+    ? outputPath
+    : path.resolve(process.cwd(), outputPath);
+  if (!fs.existsSync(absolute)) {
+    return [];
+  }
+  try {
+    const value = JSON.parse(fs.readFileSync(absolute, 'utf8'));
+    return Array.isArray(value) ? value : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
 async function createIgDaemonMcpServer() {
   async function handleToolCall(name, args) {
     const input = args || {};
@@ -227,6 +577,19 @@ async function createIgDaemonMcpServer() {
 
     if (name === 'ig_health') {
       return callDaemon(daemonUrl, 'GET', '/v1/health');
+    }
+
+    if (name === 'ig_login_ensure') {
+      return ensureLoginFlow(daemonUrl, {
+        targetUrl: input.targetUrl,
+        debugPort: input.debugPort,
+        chromePath: input.chromePath,
+        hideOnAuthenticated: input.hideOnAuthenticated,
+        confirmIfReady: input.confirmIfReady,
+        waitForAuthenticated: input.waitForAuthenticated,
+        timeoutMs: input.timeoutMs,
+        pollMs: input.pollMs,
+      });
     }
 
     if (name === 'ig_login_start') {
@@ -257,10 +620,63 @@ async function createIgDaemonMcpServer() {
       if (!type) {
         throw new McpError(ErrorCode.InvalidParams, 'type is required');
       }
-      return callDaemon(daemonUrl, 'POST', '/v1/jobs', {
-        type,
-        params: input.params || {},
+      return submitJobWithOptions(daemonUrl, type, input.params || {}, {
+        wait: input.wait,
+        timeoutMs: input.timeoutMs,
+        pollMs: input.pollMs,
+        openLoginOnUnauthenticated: input.openLoginOnUnauthenticated,
+        targetUrl: input.targetUrl,
+        debugPort: input.debugPort,
+        chromePath: input.chromePath,
+        hideOnAuthenticated: input.hideOnAuthenticated,
       });
+    }
+
+    if (name === 'ig_search_users') {
+      const query = String(input.query || '').trim();
+      if (!query) {
+        throw new McpError(ErrorCode.InvalidParams, 'query is required');
+      }
+      const limit = Math.min(
+        toPositiveInt(input.limit, SEARCH_USERS_LIMIT_CAP, 1, SEARCH_USERS_LIMIT_CAP),
+        SEARCH_USERS_LIMIT_CAP
+      );
+      const output = String(input.output || `./logs/search-${sanitizeFileToken(query)}-${Date.now()}.json`);
+      const submitResp = await submitJobWithOptions(
+        daemonUrl,
+        'search_users',
+        {
+          query,
+          limit,
+          output,
+          open: input.open,
+          debugPort: input.debugPort,
+        },
+        {
+          wait: input.wait === undefined ? true : input.wait,
+          timeoutMs: input.timeoutMs,
+          pollMs: input.pollMs,
+          openLoginOnUnauthenticated: input.openLoginOnUnauthenticated,
+          targetUrl: input.targetUrl,
+          debugPort: input.debugPort,
+          chromePath: input.chromePath,
+          hideOnAuthenticated: input.hideOnAuthenticated,
+        }
+      );
+
+      if (submitResp.requiresManualLogin) {
+        return submitResp;
+      }
+
+      const users = readUsersFromOutput(output);
+      return {
+        ...submitResp,
+        query,
+        limit,
+        output,
+        users,
+        userCount: users.length,
+      };
     }
 
     if (name === 'ig_job_list') {
@@ -289,7 +705,7 @@ async function createIgDaemonMcpServer() {
   const server = new Server(
     {
       name: 'ig-daemon-mcp',
-      version: '0.2.0',
+      version: '0.3.0',
     },
     {
       capabilities: {

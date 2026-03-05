@@ -19,11 +19,13 @@ MCP 适配器：
 - 配置项：`igDaemon`（见 `mcp_config.json` / `.mcp.json`）
 - 支持工具：
   - `ig_health`
+  - `ig_login_ensure`
   - `ig_login_start`
   - `ig_login_status`
   - `ig_login_confirm`
   - `ig_login_stop`
   - `ig_job_submit`
+  - `ig_search_users`
   - `ig_job_list`
   - `ig_job_status`
   - `ig_job_cancel`
@@ -107,6 +109,7 @@ AI 决策规则：
 1. `authenticated` -> 允许提交 job
 2. `waiting_manual_login` 且 `canConfirm=true` -> 提示人工完成登录，然后调用 `/v1/login/confirm`
 3. `error` -> 读取 `status.lastError` + `logs`，告知人工并重新 `/v1/login/start`
+4. 可以直接调用 `ig_login_ensure`：未登录时自动拉起浏览器登录流程，已登录时快速返回
 
 ## 5. Job Types and Params
 
@@ -146,6 +149,11 @@ AI 决策规则：
 3. 终态（`succeeded|failed|cancelled`）后停止轮询
 4. 读取 `job.logs` 与 `job.error`
 
+MCP 快捷模式：
+
+1. `ig_job_submit` 支持 `wait=true`、`timeoutMs`、`pollMs`，可在一次调用内等待终态
+2. `ig_search_users` 默认同步等待并直接返回解析后的用户列表（上限 5）
+
 ## 7. Agent Execution Template
 
 ```text
@@ -165,7 +173,7 @@ Step 6: return structured result (status, logs tail, output path if provided)
 
 1. `POST /v1/jobs` 返回未认证错误：
 - 错误文案：`当前未认证登录，请先完成 /v1/login/start + /v1/login/confirm`
-- 处理：回到登录流程
+- 处理：MCP 侧会自动触发登录拉起（默认开启），返回 `requiresManualLogin=true`；人工登录+confirm 后重提 job
 
 2. 登录阶段 `phase=error`：
 - 处理：读取 `status.lastError`，提示人工修复（账号验证、路径错误、网络问题），再重启登录
@@ -177,5 +185,6 @@ Step 6: return structured result (status, logs tail, output path if provided)
 ## 9. Operational Notes
 
 - daemon 当前无鉴权，默认仅绑定 `127.0.0.1`，不要暴露公网。
-- daemon 重启后，内存中的 job 列表会丢失（登录脚本状态也会重置）。
+- daemon 重启后，内存中的 job 列表会丢失。
+- 登录状态会写入 `.instagram-cli/sessions/daemon-login-state.json`，daemon 启动后会尝试基于 `browser-info.json` 自动恢复 `authenticated` 状态（前提是浏览器进程仍存活）。
 - `hideOnAuthenticated=true` 仅隐藏窗口，不会关闭浏览器进程。

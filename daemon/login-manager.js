@@ -2,6 +2,12 @@
 
 const { EventEmitter } = require('events');
 const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const SESSION_DIR = path.join('.instagram-cli', 'sessions');
+const LOGIN_STATE_FILE = 'daemon-login-state.json';
+const BROWSER_INFO_FILE = 'browser-info.json';
 
 function parsePort(value, fallback = 9222) {
   const parsed = Number(value);
@@ -15,6 +21,49 @@ function appendWithCap(arr, value, cap) {
   arr.push(value);
   if (arr.length > cap) {
     arr.splice(0, arr.length - cap);
+  }
+}
+
+function safeReadJsonFile(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function ensureDir(filePath) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function isPidAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) {
+    return false;
+  }
+  try {
+    process.kill(n, 0);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function parseDebugPortFromWsEndpoint(endpoint, fallback = 9222) {
+  const raw = String(endpoint || '').trim();
+  if (!raw) {
+    return fallback;
+  }
+  try {
+    const parsed = new URL(raw);
+    const port = Number(parsed.port || fallback);
+    return parsePort(port, fallback);
+  } catch (_error) {
+    return fallback;
   }
 }
 
@@ -39,6 +88,9 @@ class LoginManager extends EventEmitter {
     super();
     this.cwd = options.cwd || process.cwd();
     this.maxLogs = Number(options.maxLogs || 600);
+    this.sessionDir = options.sessionDir || path.join(this.cwd, SESSION_DIR);
+    this.stateFile = options.stateFile || path.join(this.sessionDir, LOGIN_STATE_FILE);
+    this.browserInfoFile = options.browserInfoFile || path.join(this.sessionDir, BROWSER_INFO_FILE);
     this.state = {
       phase: 'idle',
       targetUrl: '',
@@ -55,15 +107,18 @@ class LoginManager extends EventEmitter {
       awaitingManualConfirm: false,
       canConfirm: false,
       note: '',
+      sessionRecovered: false,
     };
     this.logs = [];
     this.child = null;
+    this._restoreFromDisk();
   }
 
   getStatus() {
+    const processRunning = Boolean(this.child && !this.child.killed);
     return {
       ...this.state,
-      running: Boolean(this.child && !this.child.killed),
+      running: processRunning || this.state.sessionRecovered === true,
     };
   }
 
@@ -73,8 +128,8 @@ class LoginManager extends EventEmitter {
   }
 
   isAuthenticated() {
-    const running = Boolean(this.child && !this.child.killed);
-    return running && this.state.phase === 'authenticated';
+    const processRunning = Boolean(this.child && !this.child.killed);
+    return this.state.phase === 'authenticated' && (processRunning || this.state.sessionRecovered === true);
   }
 
   _setState(patch) {
@@ -82,6 +137,7 @@ class LoginManager extends EventEmitter {
       ...this.state,
       ...patch,
     };
+    this._persistState();
     this.emit('state', this.getStatus());
   }
 
@@ -89,6 +145,92 @@ class LoginManager extends EventEmitter {
     const entry = `${new Date().toISOString()} [${source}] ${line}`;
     appendWithCap(this.logs, entry, this.maxLogs);
     this.emit('log', entry);
+  }
+
+  _persistState() {
+    const payload = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      state: {
+        phase: this.state.phase,
+        targetUrl: this.state.targetUrl,
+        debugPort: this.state.debugPort,
+        chromePath: this.state.chromePath,
+        hideOnAuthenticated: this.state.hideOnAuthenticated,
+        pid: this.state.pid,
+        startedAt: this.state.startedAt,
+        authenticatedAt: this.state.authenticatedAt,
+        stoppedAt: this.state.stoppedAt,
+        lastError: this.state.lastError,
+        exitCode: this.state.exitCode,
+        signal: this.state.signal,
+        awaitingManualConfirm: this.state.awaitingManualConfirm,
+        canConfirm: this.state.canConfirm,
+        note: this.state.note,
+        sessionRecovered: this.state.sessionRecovered,
+      },
+    };
+    try {
+      ensureDir(this.stateFile);
+      fs.writeFileSync(this.stateFile, JSON.stringify(payload, null, 2), 'utf8');
+    } catch (_error) {
+      // ignore persistence failures
+    }
+  }
+
+  _restoreFromDisk() {
+    const persisted = safeReadJsonFile(this.stateFile);
+    const nextState = persisted?.state || null;
+    if (!nextState || nextState.phase !== 'authenticated') {
+      return;
+    }
+
+    if (!this._restoreFromBrowserInfoSync('已从持久化状态恢复登录会话', nextState)) {
+      return;
+    }
+
+    const restoredAt = new Date().toISOString();
+    appendWithCap(
+      this.logs,
+      `${restoredAt} [system] restored authenticated session from ${this.stateFile}`,
+      this.maxLogs
+    );
+  }
+
+  _restoreFromBrowserInfoSync(note, persistedState = null) {
+    const browserInfo = safeReadJsonFile(this.browserInfoFile);
+    const browserPid = Number(browserInfo?.pid || persistedState?.pid || 0);
+    if (!isPidAlive(browserPid)) {
+      return false;
+    }
+
+    const debugPort = parsePort(
+      persistedState?.debugPort || this.state.debugPort || parseDebugPortFromWsEndpoint(browserInfo?.webSocketDebuggerUrl, 9222),
+      9222
+    );
+
+    this.state = {
+      ...this.state,
+      phase: 'authenticated',
+      targetUrl: String(persistedState?.targetUrl || this.state.targetUrl || 'https://www.instagram.com'),
+      debugPort,
+      chromePath: String(persistedState?.chromePath || this.state.chromePath || ''),
+      hideOnAuthenticated: persistedState?.hideOnAuthenticated !== false,
+      pid: browserPid,
+      startedAt: String(persistedState?.startedAt || this.state.startedAt || ''),
+      authenticatedAt: String(persistedState?.authenticatedAt || this.state.authenticatedAt || new Date().toISOString()),
+      stoppedAt: '',
+      lastError: '',
+      exitCode: null,
+      signal: '',
+      awaitingManualConfirm: false,
+      canConfirm: false,
+      note: String(note || '已恢复登录会话'),
+      sessionRecovered: true,
+    };
+    this._persistState();
+    this.emit('state', this.getStatus());
+    return true;
   }
 
   _bindOutput(child) {
@@ -122,6 +264,7 @@ class LoginManager extends EventEmitter {
           awaitingManualConfirm: false,
           canConfirm: false,
           note: '会话已认证，可提交任务',
+          sessionRecovered: false,
         });
       }
     };
@@ -187,6 +330,7 @@ class LoginManager extends EventEmitter {
       awaitingManualConfirm: false,
       canConfirm: false,
       note: '浏览器启动中',
+      sessionRecovered: false,
     });
     this._bindOutput(child);
 
@@ -199,18 +343,37 @@ class LoginManager extends EventEmitter {
     });
 
     child.on('exit', (code, signal) => {
+      const prevPhase = this.state.phase;
       this.child = null;
+      if (prevPhase === 'stopping') {
+        this._setState({
+          phase: 'stopped',
+          pid: 0,
+          stoppedAt: new Date().toISOString(),
+          exitCode: code,
+          signal: signal || '',
+          awaitingManualConfirm: false,
+          canConfirm: false,
+          note: '登录进程已停止',
+          sessionRecovered: false,
+        });
+        return;
+      }
+
+      if (this._restoreFromBrowserInfoSync('登录进程退出，已切换为恢复会话')) {
+        return;
+      }
+
       this._setState({
-        phase: this.state.phase === 'stopping' ? 'stopped' : this.state.phase,
+        phase: 'stopped',
         pid: 0,
         stoppedAt: new Date().toISOString(),
         exitCode: code,
         signal: signal || '',
         awaitingManualConfirm: false,
         canConfirm: false,
-        note: this.state.phase === 'authenticated'
-          ? '登录进程已退出'
-          : this.state.note,
+        note: prevPhase === 'authenticated' ? '登录进程已退出，会话不可用' : this.state.note,
+        sessionRecovered: false,
       });
     });
 
@@ -238,7 +401,12 @@ class LoginManager extends EventEmitter {
     if (!this.child || this.child.killed) {
       this._setState({
         phase: 'stopped',
-        note: '登录进程未运行',
+        pid: 0,
+        stoppedAt: new Date().toISOString(),
+        awaitingManualConfirm: false,
+        canConfirm: false,
+        sessionRecovered: false,
+        note: this.state.sessionRecovered ? '已清除恢复会话状态' : '登录进程未运行',
       });
       return this.getStatus();
     }

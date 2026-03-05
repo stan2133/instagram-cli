@@ -158,6 +158,23 @@ node login_web.js https://www.instagram.com --debug-port 9222
 2. 保持浏览器与脚本运行
 3. 使用仓库中的 `mcp_config.json` / `MCP_SETUP.md` 完成 MCP 配置
 
+## Subagent Template
+
+用于把复杂需求拆成多 subagent 并行执行（推荐用于 daemon + MCP 改动）：
+
+```bash
+npm run subagent:template
+```
+
+附加命令：
+
+```bash
+npm run subagent:template:path
+npm run subagent:template:copy
+```
+
+模板文件：`docs/SUBAGENT_PLAYBOOK_TEMPLATE.md`
+
 ## IG Daemon (MVP)
 
 用于把登录管理和任务执行集中到一个本地后台进程：

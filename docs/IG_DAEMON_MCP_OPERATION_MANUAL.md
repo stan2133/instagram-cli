@@ -127,11 +127,13 @@ curl -sS "http://127.0.0.1:4060/v1/login/status?tail=80" | jq
 ## 6. 可用 MCP 工具（igDaemon）
 
 - `ig_health`
+- `ig_login_ensure`
 - `ig_login_start`
 - `ig_login_status`
 - `ig_login_confirm`
 - `ig_login_stop`
 - `ig_job_submit`
+- `ig_search_users`
 - `ig_job_list`
 - `ig_job_status`
 - `ig_job_cancel`
@@ -246,6 +248,43 @@ curl -sS http://127.0.0.1:4060/v1/jobs/<jobId> | jq
 }
 ```
 
+同步等待终态（不需要客户端轮询）：
+
+```json
+{
+  "type": "fetch_user_posts",
+  "params": {
+    "target": "ohttomom",
+    "limit": 10,
+    "output": "./logs/ohttomom-posts.json"
+  },
+  "wait": true,
+  "timeoutMs": 120000,
+  "pollMs": 1200
+}
+```
+
+说明：
+
+- 若当前未登录，`ig_job_submit` 会自动触发浏览器登录流程（等价于自动执行 `ig_login_ensure` 的启动逻辑），返回 `requiresManualLogin=true`。
+- 人工完成浏览器登录后，调用 `ig_login_confirm`，再重新提交 job。
+
+### 8.1 推荐：直接用 `ig_search_users`
+
+```json
+{
+  "query": "dua lipa",
+  "limit": 5
+}
+```
+
+特性：
+
+- 内置 `wait=true`（默认同步等结果）
+- `limit` 强制上限为 `5`
+- 自动读取输出文件并返回 `users`
+- 若未认证会自动拉起浏览器登录并返回人工登录提示
+
 ## 9. 常见问题
 
 1. 健康检查失败 `Failed to connect 127.0.0.1:4060`
@@ -262,6 +301,11 @@ curl -sS http://127.0.0.1:4060/v1/jobs/<jobId> | jq
 
 4. daemon 重启后任务记录丢失
 - 当前是内存队列，重启会清空 job 历史
+
+5. daemon 重启后如何保持登录状态
+- 登录状态会写入 `.instagram-cli/sessions/daemon-login-state.json`
+- daemon 重启时会读取该状态，并结合 `.instagram-cli/sessions/browser-info.json` 尝试恢复 `authenticated`
+- 前提：浏览器进程仍在运行
 
 ## 10. 推荐操作顺序（最短路径）
 
