@@ -17,6 +17,50 @@ const INSTAGRAM_HOME = 'https://www.instagram.com/';
 const DEFAULT_DEBUG_PORT = Number(process.env.DEBUG_PORT || 9222);
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
+const SEARCH_TEXT_HINTS = [
+  'search',
+  '搜索',
+  'buscar',
+  'rechercher',
+  'suche',
+  'zoeken',
+  '検索',
+  '찾기',
+];
+const SEARCH_NEGATIVE_HINTS = [
+  'comment',
+  '评论',
+  '留言',
+  'message',
+  '消息',
+  'reply',
+];
+const SEARCH_ICON_SELECTORS = [
+  'a[href="/explore/search/"]',
+  'a[href="/search/"]',
+  'svg[aria-label="Search"]',
+  'svg[aria-label="搜索"]',
+  'svg[aria-label*="Search"]',
+  'svg[aria-label*="搜索"]',
+  'button[aria-label="Search"]',
+  'button[aria-label="搜索"]',
+  'button[aria-label*="Search"]',
+  'button[aria-label*="搜索"]',
+];
+const SEARCH_INPUT_SELECTORS = [
+  'input[aria-label="Search"]',
+  'input[aria-label="搜索"]',
+  'input[aria-label*="Search"]',
+  'input[aria-label*="搜索"]',
+  'input[placeholder*="Search"]',
+  'input[placeholder*="搜索"]',
+  'input[name="queryBox"]',
+  'input[role="searchbox"]',
+  '[role="dialog"] input[type="text"]',
+  '[role="dialog"] input[type="search"]',
+  'nav input[type="text"]',
+  'header input[type="text"]',
+];
 
 const RESERVED_PROFILE_PATHS = new Set([
   'accounts',
@@ -203,6 +247,26 @@ function safeReadJsonFile(filePath) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isSearchLikeText(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return SEARCH_TEXT_HINTS.some((hint) => normalized.includes(hint));
+}
+
+function isNegativeInputHint(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return SEARCH_NEGATIVE_HINTS.some((hint) => normalized.includes(hint));
+}
+
 async function connectToExistingBrowserInfo() {
   const browserInfo = safeReadJsonFile(BROWSER_INFO_FILE);
   if (!browserInfo || !browserInfo.webSocketDebuggerUrl) {
@@ -329,6 +393,33 @@ async function pickInstagramPage(browser) {
   return page;
 }
 
+async function navigateToInstagramHome(page, reason) {
+  const message = reason ? `🔄 ${reason}` : '🔄 导航到 Instagram 主页...';
+  console.log(`${message}\n`);
+  await page.goto(INSTAGRAM_HOME, {
+    waitUntil: 'networkidle2',
+    timeout: 60000,
+  });
+  await sleep(1200);
+}
+
+function isInstagramLoginUrl(url) {
+  const value = String(url || '');
+  return /instagram\.com\/accounts\/(login|onetap)/i.test(value);
+}
+
+async function assertInstagramAuthenticated(page) {
+  const currentUrl = String(page.url() || '');
+  if (isInstagramLoginUrl(currentUrl)) {
+    throw new Error('auth_required: 当前处于登录页，请先在浏览器完成人工登录');
+  }
+
+  const loginForm = await page.$('input[name="username"], input[name="password"], form[action*="/accounts/login"]');
+  if (loginForm) {
+    throw new Error('auth_required: 检测到登录表单，请先在浏览器完成人工登录');
+  }
+}
+
 async function clickFirstVisible(page, selectors) {
   for (const selector of selectors) {
     try {
@@ -361,25 +452,67 @@ async function clickFirstVisible(page, selectors) {
   return '';
 }
 
+async function isUsableSearchInputHandle(handle) {
+  if (!handle) {
+    return false;
+  }
+  try {
+    return handle.evaluate((el, searchHints, negativeHints) => {
+      if (!(el instanceof HTMLInputElement)) {
+        return false;
+      }
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect();
+      if (
+        style.display === 'none' ||
+        style.visibility === 'hidden' ||
+        style.opacity === '0' ||
+        rect.width <= 8 ||
+        rect.height <= 8
+      ) {
+        return false;
+      }
+      if (el.disabled || el.readOnly) {
+        return false;
+      }
+      const type = String(el.type || '').toLowerCase();
+      if (type === 'hidden' || type === 'password') {
+        return false;
+      }
+
+      const ariaLabel = String(el.getAttribute('aria-label') || '').toLowerCase();
+      const placeholder = String(el.getAttribute('placeholder') || '').toLowerCase();
+      const name = String(el.getAttribute('name') || '').toLowerCase();
+      const role = String(el.getAttribute('role') || '').toLowerCase();
+      const values = [ariaLabel, placeholder, name];
+      if (values.some((value) => negativeHints.some((hint) => value.includes(hint)))) {
+        return false;
+      }
+
+      const positiveByHint = values.some((value) => searchHints.some((hint) => value.includes(hint)));
+      if (positiveByHint || name === 'querybox' || role === 'searchbox') {
+        return true;
+      }
+
+      return Boolean(el.closest('nav') || el.closest('header') || el.closest('[role="dialog"]'));
+    }, SEARCH_TEXT_HINTS, SEARCH_NEGATIVE_HINTS);
+  } catch (_error) {
+    return false;
+  }
+}
+
 async function waitForSearchInput(page, timeoutMs = 12000) {
-  const selectors = [
-    'input[aria-label="Search"]',
-    'input[aria-label="搜索"]',
-    'input[aria-label*="Search"]',
-    'input[aria-label*="搜索"]',
-    'input[placeholder*="Search"]',
-    'input[placeholder*="搜索"]',
-  ];
+  const selectors = SEARCH_INPUT_SELECTORS;
 
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     for (const selector of selectors) {
       const el = await page.$(selector);
-      if (el) {
+      if (el && await isUsableSearchInputHandle(el)) {
         return { selector, element: el };
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await sleep(250);
   }
 
   return null;
@@ -387,11 +520,11 @@ async function waitForSearchInput(page, timeoutMs = 12000) {
 
 async function inputSearchQuery(page, selector, query) {
   await page.click(selector);
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  await sleep(200);
   await page.click(selector, { clickCount: 3 });
   await page.keyboard.press('Backspace');
   await page.type(selector, query, { delay: 90 });
-  await new Promise((resolve) => setTimeout(resolve, 1200));
+  await sleep(1200);
 }
 
 function mergeUniqueUsers(target, batch, limit, seen) {
@@ -692,8 +825,43 @@ async function openTargetProfile(page, user) {
     waitUntil: 'networkidle2',
     timeout: 60000,
   });
-  await new Promise((resolve) => setTimeout(resolve, 1200));
+  await sleep(1200);
   return true;
+}
+
+async function tryOpenSearchInput(page) {
+  const clickedSelector = await clickFirstVisible(page, SEARCH_ICON_SELECTORS);
+  if (clickedSelector) {
+    console.log(`✓ 已点击: ${clickedSelector}`);
+    await sleep(1000);
+  } else {
+    console.log('⚠️  未找到搜索入口，尝试直接定位搜索输入框');
+  }
+
+  const searchInput = await waitForSearchInput(page, 9000);
+  return {
+    clickedSelector,
+    searchInput,
+  };
+}
+
+async function resolveSearchInputWithFallback(page) {
+  console.log('🔍 尝试打开搜索框...\n');
+  let result = await tryOpenSearchInput(page);
+  if (result.searchInput) {
+    return result.searchInput;
+  }
+
+  console.log('⚠️  当前页面未找到搜索输入框，重置到主页后重试一次');
+  await navigateToInstagramHome(page, '重置到 Instagram 主页...');
+  await assertInstagramAuthenticated(page);
+
+  result = await tryOpenSearchInput(page);
+  if (result.searchInput) {
+    return result.searchInput;
+  }
+
+  throw new Error('ui_selector_miss: 未找到搜索输入框（已执行主页重试）');
 }
 
 async function searchUsers(query, options = {}) {
@@ -720,36 +888,15 @@ async function searchUsers(query, options = {}) {
 
   try {
     const page = await pickInstagramPage(browser);
-
-    const searchIconSelectors = [
-      'a[href="/explore/search/"]',
-      'svg[aria-label="Search"]',
-      'svg[aria-label="搜索"]',
-      'button[aria-label="Search"]',
-      'button[aria-label="搜索"]',
-    ];
-
-    console.log('🔍 尝试打开搜索框...\n');
-    const clickedSelector = await clickFirstVisible(page, searchIconSelectors);
-    if (clickedSelector) {
-      console.log(`✓ 已点击: ${clickedSelector}`);
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-    } else {
-      console.log('⚠️  未找到搜索图标，尝试直接定位搜索输入框');
-    }
-
-    const searchInput = await waitForSearchInput(page);
-    if (!searchInput) {
-      console.log('❌ 未找到搜索输入框');
-      return [];
-    }
+    await assertInstagramAuthenticated(page);
+    const searchInput = await resolveSearchInputWithFallback(page);
 
     console.log(`✓ 找到搜索输入框: ${searchInput.selector}`);
     await inputSearchQuery(page, searchInput.selector, query);
     console.log(`✅ 已输入: "${query}"\n`);
 
     await page.keyboard.press('Enter').catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await sleep(3000);
 
     const results = await extractSearchResults(page, query, limit, requestGuard);
     console.log(`✅ 找到 ${results.length} 个用户:\n`);
@@ -850,5 +997,6 @@ module.exports = {
   isProfilePath,
   normalizeExtractedUsers,
   pickTargetUser,
+  isSearchLikeText,
   parsePort,
 };

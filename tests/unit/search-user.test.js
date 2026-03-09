@@ -5,6 +5,7 @@ const {
   isProfilePath,
   normalizeExtractedUsers,
   pickTargetUser,
+  isSearchLikeText,
   parsePort,
 } = require('../../search-user');
 
@@ -91,6 +92,19 @@ describe('parsePort', () => {
   it('returns fallback for invalid port', () => {
     expect(parsePort('0', 9222)).toBe(9222);
     expect(parsePort('abc', 9222)).toBe(9222);
+  });
+});
+
+describe('isSearchLikeText', () => {
+  it('matches multi-locale search hints', () => {
+    expect(isSearchLikeText('Search')).toBe(true);
+    expect(isSearchLikeText('搜索账号')).toBe(true);
+    expect(isSearchLikeText('Buscar usuarios')).toBe(true);
+  });
+
+  it('rejects non-search text', () => {
+    expect(isSearchLikeText('Add a comment')).toBe(false);
+    expect(isSearchLikeText('')).toBe(false);
   });
 });
 
