@@ -25,6 +25,7 @@ function printUsage() {
   console.log(`  --scan-limit <n>       扫描帖子数量上限 (默认 ${DEFAULT_SCAN_LIMIT}，最大 ${MAX_SCAN_LIMIT})`);
   console.log(`  --top-reels <n>        输出最热 reels 数量 (默认 ${DEFAULT_TOP_REELS}，最大 ${MAX_TOP_LIMIT})`);
   console.log(`  --top-posts <n>        输出最热 posts 数量 (默认 ${DEFAULT_TOP_POSTS}，最大 ${MAX_TOP_LIMIT})`);
+  console.log('  --fast                 轻量模式：每条帖子仅保留主媒体，减少处理时间');
   console.log('  --output <file>        将结果保存为 JSON 文件');
   console.log('  --debug-port <port>    回退连接调试端口 (默认 9222)');
   console.log('  --keep-connected       执行完成后不主动断开浏览器连接');
@@ -41,6 +42,7 @@ function parseCliArgs(argv) {
     scanLimit: DEFAULT_SCAN_LIMIT,
     topReels: DEFAULT_TOP_REELS,
     topPosts: DEFAULT_TOP_POSTS,
+    fast: false,
     output: '',
     debugPort: 9222,
     keepConnected: false,
@@ -142,6 +144,11 @@ function parseCliArgs(argv) {
       }
       options.output = value;
       i += 1;
+      continue;
+    }
+
+    if (arg === '--fast') {
+      options.fast = true;
       continue;
     }
 
@@ -277,22 +284,29 @@ function saveResults(data, outputFile) {
 }
 
 async function fetchUserHotMedia(target, options = {}) {
+  const startedAtMs = Date.now();
   const scanLimit = Number.isInteger(options.scanLimit) ? options.scanLimit : DEFAULT_SCAN_LIMIT;
   const topReels = Number.isInteger(options.topReels) ? options.topReels : DEFAULT_TOP_REELS;
   const topPosts = Number.isInteger(options.topPosts) ? options.topPosts : DEFAULT_TOP_POSTS;
+  const fast = options.fast === true;
 
   console.log(`🎯 目标账号: ${target}`);
   console.log(`📌 扫描帖子上限: ${scanLimit}`);
   console.log(`🔥 输出 reels 数量: ${topReels}`);
-  console.log(`🔥 输出 posts 数量: ${topPosts}\n`);
+  console.log(`🔥 输出 posts 数量: ${topPosts}`);
+  console.log(`⚡ 轻量模式: ${fast ? '开启（仅主媒体）' : '关闭'}\n`);
 
+  const fetchStartedAtMs = Date.now();
   const fetched = await fetchUserPosts(target, {
     limit: scanLimit,
     debugPort: options.debugPort,
     keepConnected: options.keepConnected,
+    includeAllMedia: !fast,
     puppeteer: options.puppeteer,
   });
+  const fetchPostsMs = Date.now() - fetchStartedAtMs;
 
+  const rankStartedAtMs = Date.now();
   const ranked = rankHotMedia(fetched.posts || []);
   const topReelItems = ranked
     .filter((post) => isReelPost(post))
@@ -302,6 +316,8 @@ async function fetchUserHotMedia(target, options = {}) {
     .filter((post) => !isReelPost(post))
     .slice(0, topPosts)
     .map((item, idx) => ({ ...item, rank: idx + 1 }));
+  const rankAndSliceMs = Date.now() - rankStartedAtMs;
+  const totalMs = Date.now() - startedAtMs;
 
   const output = {
     profile: fetched.profile,
@@ -317,12 +333,19 @@ async function fetchUserHotMedia(target, options = {}) {
       requestedTopPosts: topPosts,
       actualTopReels: topReelItems.length,
       actualTopPosts: topPostItems.length,
+      mode: fast ? 'fast' : 'full',
       scoreModel: 'like + comment*8 + max(view,play)*0.15 + pinned + recency_decay',
+      timing: {
+        fetchPostsMs,
+        rankAndSliceMs,
+        totalMs,
+      },
     },
   };
 
   console.log(`✅ reels 地址数: ${output.topReelUrls.length}`);
-  console.log(`✅ posts 地址数: ${output.topPostUrls.length}\n`);
+  console.log(`✅ posts 地址数: ${output.topPostUrls.length}`);
+  console.log(`⏱️ 耗时: 抓取 ${fetchPostsMs}ms / 排序 ${rankAndSliceMs}ms / 总计 ${totalMs}ms\n`);
 
   return output;
 }
@@ -349,6 +372,7 @@ async function main() {
       scanLimit: options.scanLimit,
       topReels: options.topReels,
       topPosts: options.topPosts,
+      fast: options.fast,
       output: options.output,
       debugPort: options.debugPort,
       keepConnected: options.keepConnected,

@@ -118,6 +118,7 @@ function buildCommand(jobType, params = {}) {
       pushOption(args, 'top-posts', params.topPosts);
       pushOption(args, 'output', params.output);
       pushOption(args, 'debug-port', debugPort);
+      pushFlag(args, 'fast', params.fast === true);
       pushFlag(args, 'keep-connected', keepConnected);
       return { command: 'node', args };
     }

@@ -113,6 +113,30 @@ describe('normalizePost', () => {
     expect(post.mediaUrls).toContain('https://cover.jpg');
   });
 
+  it('supports primary-only media normalization for fast mode callers', () => {
+    const post = normalizePost({
+      code: 'REEL02',
+      media_type: 8,
+      product_type: 'clips',
+      carousel_media: [
+        {
+          media_type: 1,
+          image_versions2: { candidates: [{ url: 'https://img-1.jpg' }] },
+        },
+        {
+          media_type: 2,
+          image_versions2: { candidates: [{ url: 'https://cover-2.jpg' }] },
+          video_versions: [{ url: 'https://video-2.mp4' }],
+        },
+      ],
+      image_versions2: { candidates: [{ url: 'https://cover-root.jpg' }] },
+      video_versions: [{ url: 'https://video-root.mp4' }],
+    }, 'nike', { includeAllMedia: false });
+
+    expect(post.primaryMediaUrl).toBe('https://video-root.mp4');
+    expect(post.mediaUrls).toEqual(['https://video-root.mp4']);
+  });
+
   it('normalizes non-clips video post to /p/', () => {
     const post = normalizePost({
       code: 'VIDEO01',

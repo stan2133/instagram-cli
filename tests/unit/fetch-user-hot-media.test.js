@@ -14,6 +14,7 @@ describe('fetch-user-hot-media cli parsing', () => {
       '--scan-limit', '120',
       '--top-reels', '8',
       '--top-posts', '6',
+      '--fast',
       '--output', './logs/nike-hot.json',
       '--debug-port', '9333',
       '--keep-connected',
@@ -24,6 +25,7 @@ describe('fetch-user-hot-media cli parsing', () => {
     expect(args.scanLimit).toBe(120);
     expect(args.topReels).toBe(8);
     expect(args.topPosts).toBe(6);
+    expect(args.fast).toBe(true);
     expect(args.output).toBe('./logs/nike-hot.json');
     expect(args.debugPort).toBe(9333);
     expect(args.keepConnected).toBe(true);

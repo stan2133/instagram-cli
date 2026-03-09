@@ -425,7 +425,13 @@ function pickPrimaryMediaUrl(item) {
   return imageUrl;
 }
 
-function extractMediaUrls(item) {
+function extractMediaUrls(item, options = {}) {
+  const includeAllMedia = options.includeAllMedia !== false;
+  if (!includeAllMedia) {
+    const primary = pickPrimaryMediaUrl(item);
+    return primary ? [primary] : [];
+  }
+
   const out = [];
   const pushIf = (v) => {
     const url = String(v || '').trim();
@@ -447,7 +453,7 @@ function extractMediaUrls(item) {
   return out;
 }
 
-function normalizePost(item, username) {
+function normalizePost(item, username, options = {}) {
   const shortcode = String(item?.code || '').trim();
   const mediaType = mapMediaType(item);
   const pathPrefix = resolvePostPathPrefix(item);
@@ -469,7 +475,7 @@ function normalizePost(item, username) {
     takenAtUnix: ts > 0 ? ts : 0,
     thumbnailUrl: String(item?.image_versions2?.candidates?.[0]?.url || ''),
     primaryMediaUrl: pickPrimaryMediaUrl(item),
-    mediaUrls: extractMediaUrls(item),
+    mediaUrls: extractMediaUrls(item, options),
     isPinned: Boolean(item?.is_pinned),
     hasAudio: Boolean(item?.has_audio),
     playCount: Number(item?.play_count || 0),
@@ -477,7 +483,7 @@ function normalizePost(item, username) {
   };
 }
 
-async function fetchProfileAndPosts(page, username, limit, requestGuard) {
+async function fetchProfileAndPosts(page, username, limit, requestGuard, options = {}) {
   const profileJson = await fetchJsonInPage(
     page,
     `/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
@@ -526,7 +532,7 @@ async function fetchProfileAndPosts(page, username, limit, requestGuard) {
 
   const posts = allItems
     .slice(0, limit)
-    .map((item) => normalizePost(item, profile.username || username))
+    .map((item) => normalizePost(item, profile.username || username, options))
     .filter((post) => post.shortcode);
 
   return {
@@ -553,6 +559,7 @@ async function fetchUserPosts(target, options = {}) {
   const puppeteer = options.puppeteer || require('puppeteer');
   const limit = Number.isInteger(options.limit) ? options.limit : DEFAULT_LIMIT;
   const debugPort = parsePort(options.debugPort, DEFAULT_DEBUG_PORT);
+  const includeAllMedia = options.includeAllMedia !== false;
   const normalized = normalizeTarget(target);
   if (normalized.error) {
     throw new Error(normalized.error);
@@ -579,7 +586,13 @@ async function fetchUserPosts(target, options = {}) {
     const page = await pickInstagramPage(browser);
     await ensureLoggedInAtProfile(page, normalized.profileUrl);
 
-    const result = await fetchProfileAndPosts(page, normalized.username, limit, requestGuard);
+    const result = await fetchProfileAndPosts(
+      page,
+      normalized.username,
+      limit,
+      requestGuard,
+      { includeAllMedia }
+    );
     const output = {
       profile: result.profile,
       posts: result.posts,
@@ -587,6 +600,7 @@ async function fetchUserPosts(target, options = {}) {
         capturedAt: new Date().toISOString(),
         requestedLimit: limit,
         actualCount: result.posts.length,
+        mediaResolution: includeAllMedia ? 'full' : 'primary_only',
       },
     };
 
