@@ -21,6 +21,7 @@ describe('LoginManager persistence recovery', () => {
     const stateFile = path.join(sessionsDir, 'daemon-login-state.json');
     const browserInfoFile = path.join(sessionsDir, 'browser-info.json');
 
+    const now = new Date();
     writeJson(stateFile, {
       version: 1,
       state: {
@@ -29,13 +30,16 @@ describe('LoginManager persistence recovery', () => {
         debugPort: 9222,
         chromePath: '',
         hideOnAuthenticated: true,
-        startedAt: '2026-01-01T00:00:00.000Z',
-        authenticatedAt: '2026-01-01T00:00:10.000Z',
+        startedAt: new Date(now.getTime() - 30 * 1000).toISOString(),
+        authenticatedAt: new Date(now.getTime() - 10 * 1000).toISOString(),
       },
     });
     writeJson(browserInfoFile, {
       pid: process.pid,
       webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/browser/mock',
+      savedAt: now.toISOString(),
+      targetUrl: 'https://www.instagram.com/',
+      debugPort: 9222,
     });
 
     const manager = new LoginManager({ cwd });
@@ -53,17 +57,22 @@ describe('LoginManager persistence recovery', () => {
     const stateFile = path.join(sessionsDir, 'daemon-login-state.json');
     const browserInfoFile = path.join(sessionsDir, 'browser-info.json');
 
+    const now = new Date();
     writeJson(stateFile, {
       version: 1,
       state: {
         phase: 'authenticated',
         targetUrl: 'https://www.instagram.com',
         debugPort: 9222,
+        authenticatedAt: now.toISOString(),
       },
     });
     writeJson(browserInfoFile, {
       pid: 999999,
       webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/browser/mock',
+      savedAt: now.toISOString(),
+      targetUrl: 'https://www.instagram.com/',
+      debugPort: 9222,
     });
 
     const manager = new LoginManager({ cwd });
@@ -81,17 +90,22 @@ describe('LoginManager persistence recovery', () => {
     const stateFile = path.join(sessionsDir, 'daemon-login-state.json');
     const browserInfoFile = path.join(sessionsDir, 'browser-info.json');
 
+    const now = new Date();
     writeJson(stateFile, {
       version: 1,
       state: {
         phase: 'authenticated',
         targetUrl: 'https://www.instagram.com',
         debugPort: 9222,
+        authenticatedAt: now.toISOString(),
       },
     });
     writeJson(browserInfoFile, {
       pid: process.pid,
       webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/browser/mock',
+      savedAt: now.toISOString(),
+      targetUrl: 'https://www.instagram.com/',
+      debugPort: 9222,
     });
 
     const manager = new LoginManager({ cwd });
@@ -102,5 +116,36 @@ describe('LoginManager persistence recovery', () => {
     expect(stopped.sessionRecovered).toBe(false);
     expect(manager.isAuthenticated()).toBe(false);
   });
-});
 
+  test('does not restore authenticated state when recovery window is expired', () => {
+    const cwd = makeTmpDir();
+    const sessionsDir = path.join(cwd, '.instagram-cli', 'sessions');
+    const stateFile = path.join(sessionsDir, 'daemon-login-state.json');
+    const browserInfoFile = path.join(sessionsDir, 'browser-info.json');
+    const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+
+    writeJson(stateFile, {
+      version: 1,
+      state: {
+        phase: 'authenticated',
+        targetUrl: 'https://www.instagram.com',
+        debugPort: 9222,
+        authenticatedAt: old,
+      },
+    });
+    writeJson(browserInfoFile, {
+      pid: process.pid,
+      webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/browser/mock',
+      savedAt: old,
+      targetUrl: 'https://www.instagram.com/',
+      debugPort: 9222,
+    });
+
+    const manager = new LoginManager({ cwd });
+    const status = manager.getStatus();
+
+    expect(status.phase).toBe('idle');
+    expect(status.sessionRecovered).toBe(false);
+    expect(manager.isAuthenticated()).toBe(false);
+  });
+});

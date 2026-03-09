@@ -1,7 +1,5 @@
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
 const {
@@ -12,6 +10,7 @@ const {
 } = require('@modelcontextprotocol/sdk/types.js');
 
 const DEFAULT_DAEMON_URL = String(process.env.IG_DAEMON_URL || 'http://127.0.0.1:4060');
+const DEFAULT_DAEMON_AUTH_TOKEN = String(process.env.IG_DAEMON_AUTH_TOKEN || process.env.IG_DAEMON_TOKEN || '').trim();
 const DEFAULT_LOGIN_TARGET_URL = 'https://www.instagram.com';
 const DEFAULT_DEBUG_PORT = 9222;
 const DEFAULT_JOB_POLL_MS = 1200;
@@ -241,6 +240,56 @@ function listToolDefinitions() {
       },
     },
     {
+      name: 'ig_fetch_user_profile_summary',
+      description: 'Fetch user profile summary and recent media preview.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          daemonUrl: { type: 'string' },
+          target: { type: 'string' },
+          limit: { type: 'number' },
+          output: { type: 'string' },
+          wait: { type: 'boolean' },
+          timeoutMs: { type: 'number' },
+          pollMs: { type: 'number' },
+          openLoginOnUnauthenticated: { type: 'boolean' },
+          targetUrl: { type: 'string' },
+          debugPort: { type: 'number' },
+          chromePath: { type: 'string' },
+          hideOnAuthenticated: { type: 'boolean' },
+        },
+        required: ['target'],
+      },
+    },
+    {
+      name: 'ig_search_content_local',
+      description: 'Search locally indexed Instagram content from logs and JSON artifacts.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          daemonUrl: { type: 'string' },
+          query: { type: 'string' },
+          target: { type: 'string' },
+          mediaType: { type: 'string' },
+          since: { type: 'string' },
+          until: { type: 'string' },
+          sort: { type: 'string' },
+          limit: { type: 'number' },
+          input: { type: 'array', items: { type: 'string' } },
+          inputDir: { type: 'string' },
+          indexFile: { type: 'string' },
+          useIndexOnly: { type: 'boolean' },
+          rebuildIndex: { type: 'boolean' },
+          output: { type: 'string' },
+          wait: { type: 'boolean' },
+          timeoutMs: { type: 'number' },
+          pollMs: { type: 'number' },
+          openLoginOnUnauthenticated: { type: 'boolean' },
+        },
+        required: ['query'],
+      },
+    },
+    {
       name: 'ig_job_list',
       description: 'List all daemon jobs.',
       inputSchema: {
@@ -281,13 +330,17 @@ async function callDaemon(baseUrl, method, endpoint, body) {
   const url = `${baseUrl}${endpoint}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
+  const headers = {
+    'content-type': 'application/json',
+  };
+  if (DEFAULT_DAEMON_AUTH_TOKEN) {
+    headers.authorization = `Bearer ${DEFAULT_DAEMON_AUTH_TOKEN}`;
+  }
 
   try {
     const response = await fetch(url, {
       method,
-      headers: {
-        'content-type': 'application/json',
-      },
+      headers,
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal,
     });
@@ -551,23 +604,75 @@ async function submitJobWithOptions(baseUrl, type, params, options = {}) {
   };
 }
 
-function readUsersFromOutput(filePathLike) {
-  const outputPath = String(filePathLike || '').trim();
-  if (!outputPath) {
+function getJobOutputJson(payload = {}) {
+  const output = payload?.job?.result?.output;
+  if (!output || typeof output !== 'object') {
+    return null;
+  }
+  if (output.tooLarge) {
+    return null;
+  }
+  if (output.error) {
+    return null;
+  }
+  return output.json ?? null;
+}
+
+function readUsersFromJobResult(payload = {}) {
+  const value = getJobOutputJson(payload);
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (Array.isArray(value?.users)) {
+    return value.users;
+  }
+  return [];
+}
+
+function readObjectFromJobResult(payload = {}) {
+  const value = getJobOutputJson(payload);
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return {
+      items: value,
+    };
+  }
+  return {};
+}
+
+function sanitizeUsernameToken(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/^@+/, '')
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'user';
+}
+
+function sanitizeSortToken(text) {
+  const normalized = String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z]+/g, '')
+    .slice(0, 20) || 'relevance';
+  if (normalized === 'relevance' || normalized === 'recent' || normalized === 'engagement') {
+    return normalized;
+  }
+  return 'relevance';
+}
+
+function normalizeInputPathArray(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+  }
+  const single = String(value || '').trim();
+  if (!single) {
     return [];
   }
-  const absolute = path.isAbsolute(outputPath)
-    ? outputPath
-    : path.resolve(process.cwd(), outputPath);
-  if (!fs.existsSync(absolute)) {
-    return [];
-  }
-  try {
-    const value = JSON.parse(fs.readFileSync(absolute, 'utf8'));
-    return Array.isArray(value) ? value : [];
-  } catch (_error) {
-    return [];
-  }
+  return [single];
 }
 
 async function createIgDaemonMcpServer() {
@@ -668,7 +773,7 @@ async function createIgDaemonMcpServer() {
         return submitResp;
       }
 
-      const users = readUsersFromOutput(output);
+      const users = readUsersFromJobResult(submitResp);
       return {
         ...submitResp,
         query,
@@ -676,6 +781,120 @@ async function createIgDaemonMcpServer() {
         output,
         users,
         userCount: users.length,
+      };
+    }
+
+    if (name === 'ig_fetch_user_profile_summary') {
+      const target = String(input.target || '').trim();
+      if (!target) {
+        throw new McpError(ErrorCode.InvalidParams, 'target is required');
+      }
+      const limit = toPositiveInt(input.limit, 6, 1, 30);
+      const output = String(
+        input.output || `./logs/profile-summary-${sanitizeUsernameToken(target)}-${Date.now()}.json`
+      );
+
+      const submitResp = await submitJobWithOptions(
+        daemonUrl,
+        'fetch_user_profile_summary',
+        {
+          target,
+          limit,
+          output,
+          debugPort: input.debugPort,
+        },
+        {
+          wait: input.wait === undefined ? true : input.wait,
+          timeoutMs: input.timeoutMs,
+          pollMs: input.pollMs,
+          openLoginOnUnauthenticated: input.openLoginOnUnauthenticated,
+          targetUrl: input.targetUrl,
+          debugPort: input.debugPort,
+          chromePath: input.chromePath,
+          hideOnAuthenticated: input.hideOnAuthenticated,
+        }
+      );
+
+      if (submitResp.requiresManualLogin) {
+        return submitResp;
+      }
+
+      const data = readObjectFromJobResult(submitResp);
+      const profileSummary = data.profileSummary && typeof data.profileSummary === 'object'
+        ? data.profileSummary
+        : null;
+      const recentMediaPreview = Array.isArray(data.recentMediaPreview)
+        ? data.recentMediaPreview
+        : [];
+
+      return {
+        ...submitResp,
+        target,
+        limit,
+        output,
+        profileSummary,
+        recentMediaPreview,
+        previewCount: recentMediaPreview.length,
+      };
+    }
+
+    if (name === 'ig_search_content_local') {
+      const query = String(input.query || '').trim();
+      if (!query) {
+        throw new McpError(ErrorCode.InvalidParams, 'query is required');
+      }
+      const limit = toPositiveInt(input.limit, 20, 1, 300);
+      const sort = sanitizeSortToken(input.sort || 'relevance');
+      const output = String(
+        input.output || `./logs/content-local-${sanitizeFileToken(query)}-${Date.now()}.json`
+      );
+
+      const submitResp = await submitJobWithOptions(
+        daemonUrl,
+        'search_content_local',
+        {
+          query,
+          target: input.target,
+          mediaType: input.mediaType,
+          since: input.since,
+          until: input.until,
+          sort,
+          limit,
+          input: normalizeInputPathArray(input.input),
+          inputDir: input.inputDir,
+          indexFile: input.indexFile,
+          useIndexOnly: toBool(input.useIndexOnly, false),
+          rebuildIndex: toBool(input.rebuildIndex, false),
+          output,
+        },
+        {
+          wait: input.wait === undefined ? true : input.wait,
+          timeoutMs: input.timeoutMs,
+          pollMs: input.pollMs,
+          openLoginOnUnauthenticated: input.openLoginOnUnauthenticated === undefined
+            ? false
+            : input.openLoginOnUnauthenticated,
+        }
+      );
+
+      if (submitResp.requiresManualLogin) {
+        return submitResp;
+      }
+
+      const data = readObjectFromJobResult(submitResp);
+      const hits = Array.isArray(data.hits) ? data.hits : [];
+
+      return {
+        ...submitResp,
+        query,
+        sort,
+        limit,
+        output,
+        hits,
+        hitCount: hits.length,
+        totalMatchedRecords: Number(data?.meta?.totalMatchedRecords || hits.length),
+        index: data?.index || null,
+        filters: data?.filters || null,
       };
     }
 
@@ -705,7 +924,7 @@ async function createIgDaemonMcpServer() {
   const server = new Server(
     {
       name: 'ig-daemon-mcp',
-      version: '0.3.0',
+      version: '0.4.0',
     },
     {
       capabilities: {

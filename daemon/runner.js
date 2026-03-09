@@ -2,6 +2,18 @@
 
 const { spawn } = require('child_process');
 
+const SUPPORTED_JOB_TYPES = Object.freeze([
+  'search_users',
+  'fetch_user_posts',
+  'fetch_user_following',
+  'fetch_user_profile_summary',
+  'fetch_post_hot_comments',
+  'fetch_user_hot_media',
+  'download_hot_media_assets',
+  'search_content_local',
+  'go_home',
+]);
+
 function parsePort(value, fallback = 9222) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
@@ -69,6 +81,18 @@ function buildCommand(jobType, params = {}) {
       pushFlag(args, 'keep-connected', keepConnected);
       return { command: 'node', args };
     }
+    case 'fetch_user_profile_summary': {
+      const target = String(params.target || '').trim();
+      if (!target) {
+        throw new Error('fetch_user_profile_summary 缺少 target');
+      }
+      const args = ['fetch-user-profile-summary.js', target];
+      pushOption(args, 'limit', params.limit);
+      pushOption(args, 'output', params.output);
+      pushOption(args, 'debug-port', debugPort);
+      pushFlag(args, 'keep-connected', keepConnected);
+      return { command: 'node', args };
+    }
     case 'fetch_post_hot_comments': {
       const target = String(params.target || '').trim();
       if (!target) {
@@ -115,6 +139,32 @@ function buildCommand(jobType, params = {}) {
         args.push('--no-cover');
       }
       pushFlag(args, 'keep-connected', keepConnected);
+      return { command: 'node', args };
+    }
+    case 'search_content_local': {
+      const query = String(params.query || '').trim();
+      if (!query) {
+        throw new Error('search_content_local 缺少 query');
+      }
+      const args = ['search-content-local.js', query];
+      pushOption(args, 'target', params.target);
+      pushOption(args, 'media-type', params.mediaType);
+      pushOption(args, 'since', params.since);
+      pushOption(args, 'until', params.until);
+      pushOption(args, 'sort', params.sort);
+      pushOption(args, 'limit', params.limit);
+      pushOption(args, 'input-dir', params.inputDir);
+      pushOption(args, 'index-file', params.indexFile);
+      pushOption(args, 'output', params.output);
+      if (Array.isArray(params.input)) {
+        for (const item of params.input) {
+          pushOption(args, 'input', item);
+        }
+      } else {
+        pushOption(args, 'input', params.input);
+      }
+      pushFlag(args, 'use-index-only', params.useIndexOnly === true);
+      pushFlag(args, 'rebuild-index', params.rebuildIndex === true);
       return { command: 'node', args };
     }
     case 'go_home': {
@@ -210,4 +260,5 @@ function runCommand(jobType, params, options = {}) {
 module.exports = {
   buildCommand,
   runCommand,
+  SUPPORTED_JOB_TYPES,
 };

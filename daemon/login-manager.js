@@ -8,10 +8,19 @@ const path = require('path');
 const SESSION_DIR = path.join('.instagram-cli', 'sessions');
 const LOGIN_STATE_FILE = 'daemon-login-state.json';
 const BROWSER_INFO_FILE = 'browser-info.json';
+const DEFAULT_RECOVERY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function parsePort(value, fallback = 9222) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function parseDuration(value, fallback = DEFAULT_RECOVERY_MAX_AGE_MS) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 60 * 1000) {
     return fallback;
   }
   return parsed;
@@ -40,6 +49,26 @@ function ensureDir(filePath) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+function parseIsoMs(value) {
+  if (!value) {
+    return 0;
+  }
+  const ms = Date.parse(String(value));
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function normalizeHostname(rawUrl) {
+  const value = String(rawUrl || '').trim();
+  if (!value) {
+    return '';
+  }
+  try {
+    return new URL(value).hostname.replace(/^www\./i, '').toLowerCase();
+  } catch (_error) {
+    return '';
+  }
+}
+
 function isPidAlive(pid) {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0) {
@@ -51,6 +80,58 @@ function isPidAlive(pid) {
   } catch (_error) {
     return false;
   }
+}
+
+function validateRecoveryFingerprint(persistedState, browserInfo, debugPort, recoveryMaxAgeMs) {
+  const wsEndpoint = String(browserInfo?.webSocketDebuggerUrl || '').trim();
+  if (!wsEndpoint) {
+    return { ok: false, reason: 'browser-info 缺少 webSocketDebuggerUrl' };
+  }
+
+  const endpointPort = parseDebugPortFromWsEndpoint(wsEndpoint, debugPort);
+  if (endpointPort !== debugPort) {
+    return {
+      ok: false,
+      reason: `debug port mismatch: expected ${debugPort}, got ${endpointPort}`,
+    };
+  }
+
+  const persistedPid = Number(persistedState?.pid || 0);
+  const browserPid = Number(browserInfo?.pid || 0);
+  if (persistedPid > 0 && browserPid > 0 && persistedPid !== browserPid) {
+    return {
+      ok: false,
+      reason: `pid mismatch: state=${persistedPid} browserInfo=${browserPid}`,
+    };
+  }
+
+  const persistedTargetHost = normalizeHostname(persistedState?.targetUrl);
+  const browserTargetHost = normalizeHostname(browserInfo?.targetUrl);
+  if (persistedTargetHost && browserTargetHost && persistedTargetHost !== browserTargetHost) {
+    return {
+      ok: false,
+      reason: `target host mismatch: state=${persistedTargetHost} browserInfo=${browserTargetHost}`,
+    };
+  }
+
+  const now = Date.now();
+  const authenticatedAtMs = parseIsoMs(persistedState?.authenticatedAt);
+  if (authenticatedAtMs > 0 && now - authenticatedAtMs > recoveryMaxAgeMs) {
+    return {
+      ok: false,
+      reason: `recovery window expired for authenticatedAt: ${persistedState?.authenticatedAt}`,
+    };
+  }
+
+  const savedAtMs = parseIsoMs(browserInfo?.savedAt);
+  if (savedAtMs > 0 && now - savedAtMs > recoveryMaxAgeMs) {
+    return {
+      ok: false,
+      reason: `recovery window expired for browser-info savedAt: ${browserInfo?.savedAt}`,
+    };
+  }
+
+  return { ok: true };
 }
 
 function parseDebugPortFromWsEndpoint(endpoint, fallback = 9222) {
@@ -91,6 +172,10 @@ class LoginManager extends EventEmitter {
     this.sessionDir = options.sessionDir || path.join(this.cwd, SESSION_DIR);
     this.stateFile = options.stateFile || path.join(this.sessionDir, LOGIN_STATE_FILE);
     this.browserInfoFile = options.browserInfoFile || path.join(this.sessionDir, BROWSER_INFO_FILE);
+    this.recoveryMaxAgeMs = parseDuration(
+      options.recoveryMaxAgeMs ?? process.env.IG_DAEMON_RECOVERY_MAX_AGE_MS,
+      DEFAULT_RECOVERY_MAX_AGE_MS
+    );
     this.state = {
       phase: 'idle',
       targetUrl: '',
@@ -201,6 +286,7 @@ class LoginManager extends EventEmitter {
     const browserInfo = safeReadJsonFile(this.browserInfoFile);
     const browserPid = Number(browserInfo?.pid || persistedState?.pid || 0);
     if (!isPidAlive(browserPid)) {
+      this._appendLog('system', `跳过恢复会话：PID 不可用 (${browserPid || 0})`);
       return false;
     }
 
@@ -208,6 +294,16 @@ class LoginManager extends EventEmitter {
       persistedState?.debugPort || this.state.debugPort || parseDebugPortFromWsEndpoint(browserInfo?.webSocketDebuggerUrl, 9222),
       9222
     );
+    const fingerprint = validateRecoveryFingerprint(
+      persistedState,
+      browserInfo,
+      debugPort,
+      this.recoveryMaxAgeMs
+    );
+    if (!fingerprint.ok) {
+      this._appendLog('system', `跳过恢复会话：${fingerprint.reason}`);
+      return false;
+    }
 
     this.state = {
       ...this.state,

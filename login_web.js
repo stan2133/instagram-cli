@@ -876,7 +876,11 @@ async function login(targetUrl, options = {}) {
     const browserInfo = {
       // Preserve Puppeteer's endpoint as-is so IPv6 endpoints (e.g. ws://[::1]:9222/...) keep working.
       webSocketDebuggerUrl: wsEndpoint || `ws://127.0.0.1:${debugPort}/devtools/browser`,
-      pid: browser.process()?.pid
+      pid: browser.process()?.pid,
+      savedAt: new Date().toISOString(),
+      targetUrl,
+      debugPort,
+      chromePath: options.chromePath || '',
     };
 
     // 保存浏览器信息供其他脚本使用
